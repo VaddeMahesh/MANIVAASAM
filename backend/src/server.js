@@ -15,16 +15,24 @@ connectDB();
 
 // Middleware
 const allowedOrigins = [
-  process.env.FRONTEND_URL || 'http://localhost:3000',
+  process.env.FRONTEND_URL,
   'http://localhost:3000',
   'http://localhost:3001'
-];
+].filter(Boolean);
+
 app.use(cors({
   origin: function (origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) {
+    if (!origin) return callback(null, true);
+    
+    // Allow configured frontend URL, local development, and any Vercel deployment preview/production
+    const isAllowed = allowedOrigins.includes(origin) ||
+      origin.endsWith('.vercel.app') ||
+      origin.startsWith('http://localhost:');
+
+    if (isAllowed) {
       callback(null, true);
     } else {
-      callback(null, true); // Allow dev origins
+      callback(null, true);
     }
   },
   credentials: true,
