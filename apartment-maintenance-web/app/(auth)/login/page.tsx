@@ -22,12 +22,12 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false)
 
   // Admin credentials
-  const [email, setEmail] = useState('admin@greenviewresidency.com')
-  const [password, setPassword] = useState('password')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
 
   // Resident credentials
-  const [residentInput, setResidentInput] = useState('A-104')
-  const [residentPassword, setResidentPassword] = useState('password123')
+  const [residentInput, setResidentInput] = useState('')
+  const [residentPassword, setResidentPassword] = useState('')
 
   // Resident Registration state
   const [registerOpen, setRegisterOpen] = useState(false)
@@ -36,7 +36,8 @@ export default function LoginPage() {
   const [regEmail, setRegEmail] = useState('')
   const [regPhone, setRegPhone] = useState('')
   const [regRole, setRegRole] = useState<'owner' | 'tenant'>('owner')
-  const [regPassword, setRegPassword] = useState('password123')
+  const [regPassword, setRegPassword] = useState('')
+  const [showRegPassword, setShowRegPassword] = useState(false)
   const [registering, setRegistering] = useState(false)
 
   const [errorMsg, setErrorMsg] = useState('')
@@ -237,7 +238,7 @@ export default function LoginPage() {
                 <Input
                   id="email"
                   type="email"
-                  placeholder="admin@greenviewresidency.com"
+                  placeholder="Enter your admin email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
@@ -256,7 +257,7 @@ export default function LoginPage() {
                   <Input
                     id="password"
                     type={showPassword ? 'text' : 'password'}
-                    placeholder="••••••••"
+                    placeholder="Enter your password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     required
@@ -313,7 +314,7 @@ export default function LoginPage() {
                     <Input
                       id="residentPassword"
                       type={showPassword ? 'text' : 'password'}
-                      placeholder="••••••••"
+                      placeholder="Enter your password"
                       value={residentPassword}
                       onChange={(e) => setResidentPassword(e.target.value)}
                       required
@@ -476,14 +477,25 @@ export default function LoginPage() {
 
             <div className="space-y-1">
               <Label className="text-xs">Password <span className="text-red-500">*</span></Label>
-              <Input
-                type="password"
-                required
-                minLength={6}
-                value={regPassword}
-                onChange={(e) => setRegPassword(e.target.value)}
-                className="h-9 text-xs"
-              />
+              <div className="relative">
+                <Input
+                  type={showRegPassword ? 'text' : 'password'}
+                  required
+                  minLength={6}
+                  placeholder="Min. 6 characters"
+                  value={regPassword}
+                  onChange={(e) => setRegPassword(e.target.value)}
+                  className="h-9 pr-10 text-xs"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowRegPassword(!showRegPassword)}
+                  aria-label={showRegPassword ? 'Hide password' : 'Show password'}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                >
+                  {showRegPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
             </div>
 
             <DialogFooter className="pt-2">
