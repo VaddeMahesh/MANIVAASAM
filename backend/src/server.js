@@ -7,8 +7,17 @@ const connectDB = require('./config/database');
 const errorHandler = require('./middleware/errorHandler');
 const requestLogger = require('./middleware/requestLogger');
 
+const fs = require('fs');
+const path = require('path');
+
 // Initialize Express app
 const app = express();
+
+// Ensure uploads folder exists
+const uploadsDir = path.join(__dirname, '../uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
 
 // Connect to Database
 connectDB();

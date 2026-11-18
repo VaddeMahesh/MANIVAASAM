@@ -2,9 +2,22 @@ const morgan = require('morgan');
 const fs = require('fs');
 const path = require('path');
 
-// simple request logger using morgan; writes to stdout and a rotating log file
-const accessLogStream = fs.createWriteStream(path.join(__dirname, '../../logs/access.log'), { flags: 'a' });
+// In production, stream logs to standard output for Render / Cloud log monitoring
+let logStream = process.stdout;
 
-module.exports = morgan('dev', {
-  stream: accessLogStream
+if (process.env.NODE_ENV !== 'production') {
+  try {
+    const logDir = path.join(__dirname, '../../logs');
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+    }
+    logStream = fs.createWriteStream(path.join(logDir, 'access.log'), { flags: 'a' });
+  } catch (err) {
+    console.warn('⚠️ Could not open log file stream, falling back to stdout:', err.message);
+    logStream = process.stdout;
+  }
+}
+
+module.exports = morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev', {
+  stream: logStream
 });
