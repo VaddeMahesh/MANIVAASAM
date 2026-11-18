@@ -1,6 +1,6 @@
 'use client'
 import Link from 'next/link'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { Building, Eye, EyeOff, ArrowRight, Shield, User, Home, Sparkles, CheckCircle2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -11,6 +11,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useAppStore } from '@/store'
 import { useToast } from '@/hooks/use-toast'
+import { authAPI } from '@/lib/api'
+
+const LEGACY_SOCIETY_CODE_KEY = 'manivaasam:societyCode'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -25,9 +28,13 @@ export default function LoginPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
 
-  // Resident credentials
+  // Resident credentials. Flat-number login needs the Society Code, because the same
+  // flat number (e.g. A-101) exists in many societies. Email login does not.
   const [residentInput, setResidentInput] = useState('')
   const [residentPassword, setResidentPassword] = useState('')
+  const [loginSocietyCode, setLoginSocietyCode] = useState('')
+  const [residentLoginMethod, setResidentLoginMethod] = useState<'flat' | 'email'>('flat')
+  const residentUsesEmail = residentLoginMethod === 'email'
 
   // Resident Registration state
   const [registerOpen, setRegisterOpen] = useState(false)
@@ -39,59 +46,81 @@ export default function LoginPage() {
   const [regPassword, setRegPassword] = useState('')
   const [showRegPassword, setShowRegPassword] = useState(false)
   const [registering, setRegistering] = useState(false)
+  const [regSocietyCode, setRegSocietyCode] = useState('')
+  // Result of looking up the typed society code: shows the society name so residents can confirm it
+  const [societyLookup, setSocietyLookup] = useState<
+    { state: 'idle' | 'checking' | 'found' | 'missing'; name?: string }
+  >({ state: 'idle' })
+
+  const normalizeCode = (v: string) => v.toUpperCase().replace(/[^A-Z0-9]/g, '')
+
+  // Pre-fill the society code only when the resident opens an admin's invite link:
+  // /login?society=SRI6817&register=1. Otherwise the field starts empty.
+  useEffect(() => {
+    // Remove the code saved by an earlier version of this page, so it no longer appears as a default
+    try { localStorage.removeItem(LEGACY_SOCIETY_CODE_KEY) } catch {}
+
+    const params = new URLSearchParams(window.location.search)
+    const fromLink = normalizeCode(params.get('society') || '')
+    if (fromLink) {
+      setLoginSocietyCode(fromLink)
+      setRegSocietyCode(fromLink)
+      setRoleMode('resident')
+      if (params.get('register') === '1') setRegisterOpen(true)
+    }
+  }, [])
+
+  // Look up the society name shortly after the resident stops typing the code
+  useEffect(() => {
+    const code = normalizeCode(regSocietyCode)
+    if (code.length < 5) {
+      setSocietyLookup({ state: 'idle' })
+      return
+    }
+    setSocietyLookup({ state: 'checking' })
+    let cancelled = false
+    const timer = setTimeout(() => {
+      authAPI.lookupSociety(code)
+        .then((res) => { if (!cancelled) setSocietyLookup({ state: 'found', name: res?.data?.apartmentName }) })
+        .catch(() => { if (!cancelled) setSocietyLookup({ state: 'missing' }) })
+    }, 400)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [regSocietyCode])
 
   const [errorMsg, setErrorMsg] = useState('')
 
   // Handle Admin or Resident submission
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    setLoading(true)
     setErrorMsg('')
 
+    if (roleMode === 'resident' && !residentUsesEmail && !normalizeCode(loginSocietyCode)) {
+      setErrorMsg('Please enter your Society Code along with your flat number, or sign in with your email.')
+      return
+    }
+
+    setLoading(true)
     try {
       if (roleMode === 'admin') {
         await login(email, password)
         router.push('/dashboard')
       } else {
-        await residentLogin(residentInput, residentPassword)
+        await residentLogin(
+          residentInput,
+          residentPassword,
+          residentUsesEmail ? undefined : normalizeCode(loginSocietyCode)
+        )
         toast({
           title: 'Welcome to Resident Portal',
-          description: `Logged in for Flat ${residentInput.toUpperCase()}`,
+          description: residentUsesEmail ? 'Logged in successfully' : `Logged in for Flat ${residentInput.toUpperCase()}`,
           variant: 'success',
         })
         router.push('/resident')
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Login failed. Please check your credentials.'
-      if (msg.includes('404') || msg.toLowerCase().includes('not found')) {
+      if (msg.includes('404') || msg.toLowerCase().includes('route not found')) {
         setErrorMsg('Unable to connect to authentication server. Please check your network connection or verify the backend service is running.')
-      } else {
-        setErrorMsg(msg)
-      }
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  // Quick Resident Demo Sign-in
-  async function handleQuickResidentLogin(flatNumber: string) {
-    setRoleMode('resident')
-    setResidentInput(flatNumber)
-    setResidentPassword('password123')
-    setLoading(true)
-    setErrorMsg('')
-    try {
-      await residentLogin(flatNumber, 'password123')
-      toast({
-        title: 'Logged In Successfully',
-        description: `Welcome to Flat ${flatNumber} Resident Portal`,
-        variant: 'success',
-      })
-      router.push('/resident')
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Could not log in as resident.'
-      if (msg.includes('404') || msg.toLowerCase().includes('not found')) {
-        setErrorMsg('Unable to connect to authentication server. Please verify the backend service is running.')
       } else {
         setErrorMsg(msg)
       }
@@ -103,9 +132,18 @@ export default function LoginPage() {
   // Handle Resident Registration
   async function handleRegisterResident(e: React.FormEvent) {
     e.preventDefault()
+    if (societyLookup.state !== 'found') {
+      toast({
+        title: 'Check your Society Code',
+        description: 'Enter the Society Code shared by your society admin (e.g. SRI6817).',
+        variant: 'destructive',
+      })
+      return
+    }
     setRegistering(true)
     try {
       await residentSignup({
+        societyCode: normalizeCode(regSocietyCode),
         name: regName,
         flatNumber: regFlat,
         email: regEmail,
@@ -115,7 +153,7 @@ export default function LoginPage() {
       })
       toast({
         title: 'Resident Registered!',
-        description: `Account created for Flat ${regFlat}. Redirecting to your portal...`,
+        description: `Account created for Flat ${regFlat.toUpperCase()}. Redirecting to your portal...`,
         variant: 'success',
       })
       setRegisterOpen(false)
@@ -288,28 +326,75 @@ export default function LoginPage() {
             /* FORM: RESIDENT (OWNER / TENANT) LOGIN */
             <div className="space-y-4">
               <form onSubmit={handleSubmit} className="space-y-4">
-                <div className="space-y-1.5">
-                  <Label htmlFor="residentInput" className="text-xs">
-                    Flat Number or Registered Email <span className="text-red-500">*</span>
-                  </Label>
-                  <Input
-                    id="residentInput"
-                    placeholder="e.g. A-104 or owner@apartment.com"
-                    value={residentInput}
-                    onChange={(e) => setResidentInput(e.target.value)}
-                    required
-                    className="h-10 text-xs"
-                  />
-                  <span className="text-[11px] text-slate-400">
-                    Enter your Flat number (e.g. A-104, A-106, G1)
-                  </span>
+                {/* Login method switch */}
+                <div className="flex items-center gap-1 text-[11px]">
+                  <span className="text-slate-500 mr-1">Sign in with:</span>
+                  {(['flat', 'email'] as const).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => { setResidentLoginMethod(m); setResidentInput(''); setErrorMsg('') }}
+                      className={`px-2.5 py-1 rounded-md font-semibold transition-colors ${
+                        residentLoginMethod === m ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      {m === 'flat' ? 'Flat Number' : 'Email'}
+                    </button>
+                  ))}
                 </div>
 
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="residentPassword" className="text-xs">Password</Label>
-                    <span className="text-[11px] text-slate-400">Default: password123</span>
+                {residentUsesEmail ? (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="residentInput" className="text-xs">
+                      Registered Email <span className="text-red-500">*</span>
+                    </Label>
+                    <Input
+                      id="residentInput"
+                      type="email"
+                      placeholder="e.g. owner@gmail.com"
+                      value={residentInput}
+                      onChange={(e) => setResidentInput(e.target.value)}
+                      required
+                      className="h-10 text-xs"
+                    />
                   </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="loginSocietyCode" className="text-xs">
+                        Society Code <span className="text-red-500">*</span>
+                      </Label>
+                      <Input
+                        id="loginSocietyCode"
+                        placeholder="Enter society code"
+                        value={loginSocietyCode}
+                        onChange={(e) => setLoginSocietyCode(e.target.value.toUpperCase())}
+                        autoComplete="off"
+                        required
+                        className="h-10 text-xs font-mono tracking-wider uppercase"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="residentInput" className="text-xs">
+                        Flat Number <span className="text-red-500">*</span>
+                      </Label>
+                      <Input
+                        id="residentInput"
+                        placeholder="e.g. A-104"
+                        value={residentInput}
+                        onChange={(e) => setResidentInput(e.target.value)}
+                        required
+                        className="h-10 text-xs"
+                      />
+                    </div>
+                    <span className="col-span-2 -mt-1 text-[11px] text-slate-400">
+                      Don&apos;t know your Society Code? Ask your society admin, or sign in with Email.
+                    </span>
+                  </div>
+                )}
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="residentPassword" className="text-xs">Password</Label>
                   <div className="relative">
                     <Input
                       id="residentPassword"
@@ -323,6 +408,7 @@ export default function LoginPage() {
                     <button
                       type="button"
                       onClick={() => setShowPassword(!showPassword)}
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
                       className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
                     >
                       {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -334,43 +420,6 @@ export default function LoginPage() {
                   {loading ? 'Signing in...' : 'Sign In to Resident Portal'}
                 </Button>
               </form>
-
-              {/* Quick 1-Click Resident Sign-in Buttons */}
-              <div className="pt-2 border-t border-slate-100">
-                <p className="text-[11px] font-semibold text-slate-500 mb-2 flex items-center gap-1">
-                  <Sparkles className="h-3.5 w-3.5 text-indigo-500" />
-                  Quick Resident Demo Login:
-                </p>
-                <div className="grid grid-cols-3 gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handleQuickResidentLogin('A-104')}
-                    className="h-8 text-[11px] font-bold border-indigo-200 text-indigo-700 bg-indigo-50/50 hover:bg-indigo-100"
-                  >
-                    Flat A-104 (₹3,220)
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handleQuickResidentLogin('A-106')}
-                    className="h-8 text-[11px] font-bold border-indigo-200 text-indigo-700 bg-indigo-50/50 hover:bg-indigo-100"
-                  >
-                    Flat A-106 (₹4,955)
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handleQuickResidentLogin('G1')}
-                    className="h-8 text-[11px] font-bold border-indigo-200 text-indigo-700 bg-indigo-50/50 hover:bg-indigo-100"
-                  >
-                    Flat G1 (₹1,924)
-                  </Button>
-                </div>
-              </div>
 
               {/* Register Flat Link */}
               <div className="text-center pt-2 text-xs text-slate-500">
@@ -416,6 +465,29 @@ export default function LoginPage() {
           </DialogHeader>
 
           <form onSubmit={handleRegisterResident} className="space-y-3.5 py-2">
+            <div className="space-y-1">
+              <Label className="text-xs">Society Code <span className="text-red-500">*</span></Label>
+              <Input
+                required
+                placeholder="Enter society code (ask your society admin)"
+                value={regSocietyCode}
+                onChange={(e) => setRegSocietyCode(e.target.value.toUpperCase())}
+                autoComplete="off"
+                className="h-9 text-xs font-mono tracking-wider uppercase"
+              />
+              {societyLookup.state === 'checking' && (
+                <span className="text-[11px] text-slate-400">Checking code...</span>
+              )}
+              {societyLookup.state === 'found' && (
+                <span className="text-[11px] font-semibold text-emerald-700 flex items-center gap-1">
+                  <CheckCircle2 className="h-3 w-3" /> {societyLookup.name}
+                </span>
+              )}
+              {societyLookup.state === 'missing' && (
+                <span className="text-[11px] text-red-600">No society found with this code.</span>
+              )}
+            </div>
+
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
                 <Label className="text-xs">Flat Number <span className="text-red-500">*</span></Label>

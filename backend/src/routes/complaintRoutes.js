@@ -2,18 +2,21 @@ const express = require('express');
 const router = express.Router();
 const { body } = require('express-validator');
 const complaintController = require('../controllers/complaintController');
-const { protect } = require('../middleware/auth');
+const { protect, adminOnly } = require('../middleware/auth');
 
-router.get('/', protect, complaintController.listComplaints);
-router.post('/', protect, [
+// Admin-only. Residents use /api/resident/my-complaints and /api/resident/complaints instead.
+router.use(protect, adminOnly);
+
+router.get('/', complaintController.listComplaints);
+router.post('/', [
   body('flatNumber').notEmpty().withMessage('Flat number required'),
   body('residentName').notEmpty().withMessage('Resident name required'),
   body('category').notEmpty().withMessage('Category required'),
   body('description').notEmpty().withMessage('Description required'),
 ], complaintController.createComplaint);
-router.get('/:id', protect, complaintController.getComplaint);
-router.put('/:id', protect, complaintController.updateComplaint);
-router.delete('/:id', protect, complaintController.deleteComplaint);
-router.post('/:id/comments', protect, complaintController.addComment);
+router.get('/:id', complaintController.getComplaint);
+router.put('/:id', complaintController.updateComplaint);
+router.delete('/:id', complaintController.deleteComplaint);
+router.post('/:id/comments', complaintController.addComment);
 
 module.exports = router;

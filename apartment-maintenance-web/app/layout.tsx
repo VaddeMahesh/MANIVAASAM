@@ -15,8 +15,9 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${geistSans.variable} h-full antialiased`}>
-      <body className="h-full bg-slate-50">
+    <html lang="en" className={`${geistSans.variable} h-full antialiased`} suppressHydrationWarning>
+      {/* suppressHydrationWarning: browser extensions (e.g. Testim, Grammarly) inject attributes on <html>/<body> before React hydrates */}
+      <body className="h-full bg-slate-50" suppressHydrationWarning>
         {children}
         <Toaster />
       </body>

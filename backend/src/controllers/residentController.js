@@ -1,7 +1,18 @@
 const Flat = require('../models/Flat');
 const Bill = require('../models/Bill');
 const Payment = require('../models/Payment');
+const Complaint = require('../models/Complaint');
 const AppError = require('../utils/AppError');
+const { toFlatKey } = require('../utils/flatKey');
+
+const COMPLAINT_CATEGORIES = ['water', 'electricity', 'lift', 'parking', 'security', 'cleaning', 'noise', 'other'];
+const COMPLAINT_PRIORITIES = ['low', 'medium', 'high', 'emergency'];
+
+// Case-insensitive exact match for flat numbers like "A-104" vs "a-104"
+const flatNumberMatch = (flatNumber) => {
+  const escaped = String(flatNumber).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^${escaped}$`, 'i');
+};
 
 // Get resident's flat profile & overview
 exports.getMyFlat = async (req, res, next) => {
@@ -54,7 +65,8 @@ exports.getMyFlat = async (req, res, next) => {
           status: flat.status,
           occupationType: flat.occupationType,
           dues,
-          apartmentName: flat.apartmentId?.apartmentName || 'Apartment Society'
+          apartmentName: flat.apartmentId?.apartmentName || 'Apartment Society',
+          societyCode: flat.apartmentId?.societyCode
         },
         latestBill,
         pendingTotal
@@ -201,6 +213,101 @@ exports.submitPayment = async (req, res, next) => {
       success: true,
       message: 'Payment proof submitted successfully! Admin will verify and approve.',
       data: payment
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Get complaints for this resident's flat:
+//  - raised: complaints filed by / for this flat (with status & resolution)
+//  - against: complaints other flats or the admin filed against this flat
+exports.getMyComplaints = async (req, res, next) => {
+  try {
+    const resident = req.resident;
+    if (!resident) return next(new AppError('Resident authentication required', 401));
+
+    const myFlat = flatNumberMatch(resident.flatNumber);
+
+    const [raised, against] = await Promise.all([
+      Complaint.find({
+        apartmentId: resident.apartmentId,
+        $or: [{ residentId: resident._id }, { flatNumber: myFlat }]
+      }).sort({ createdAt: -1 }),
+      Complaint.find({
+        apartmentId: resident.apartmentId,
+        againstFlatNumber: myFlat
+      }).sort({ createdAt: -1 })
+    ]);
+
+    // Hide who filed complaints against this flat to avoid disputes between neighbours
+    const againstSanitized = against.map((c) => {
+      const obj = c.toJSON();
+      delete obj.residentName;
+      delete obj.flatNumber;
+      delete obj.flatId;
+      delete obj.residentId;
+      delete obj.createdBy;
+      delete obj.comments;
+      return obj;
+    });
+
+    res.json({
+      success: true,
+      data: { raised, against: againstSanitized }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Resident files a new complaint for their own flat (optionally against another flat)
+exports.submitComplaint = async (req, res, next) => {
+  try {
+    const resident = req.resident;
+    if (!resident) return next(new AppError('Resident authentication required', 401));
+
+    const { category, description, priority = 'medium', againstFlatNumber } = req.body;
+
+    if (!category || !COMPLAINT_CATEGORIES.includes(category)) {
+      return next(new AppError('Please select a valid complaint category', 400));
+    }
+    if (!description || !String(description).trim()) {
+      return next(new AppError('Please describe the issue', 400));
+    }
+    if (!COMPLAINT_PRIORITIES.includes(priority)) {
+      return next(new AppError('Invalid priority', 400));
+    }
+
+    let againstFlat;
+    if (againstFlatNumber && String(againstFlatNumber).trim()) {
+      const target = String(againstFlatNumber).trim();
+      if (toFlatKey(resident.flatNumber) === toFlatKey(target)) {
+        return next(new AppError('You cannot raise a complaint against your own flat', 400));
+      }
+      const flat = await Flat.findOne({ apartmentId: resident.apartmentId, flatKey: toFlatKey(target) });
+      if (!flat) return next(new AppError(`Flat ${target} was not found in your apartment`, 400));
+      againstFlat = flat.flatNumber;
+    }
+
+    const complaint = await Complaint.create({
+      apartmentId: resident.apartmentId,
+      flatId: resident.flatId?._id || resident.flatId,
+      flatNumber: resident.flatNumber,
+      residentName: resident.name,
+      residentId: resident._id,
+      raisedBy: 'resident',
+      category,
+      priority,
+      description: String(description).trim(),
+      againstFlatNumber: againstFlat,
+      status: 'open'
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Complaint submitted. The society admin will review it shortly.',
+      data: complaint
     });
   } catch (error) {
     next(error);

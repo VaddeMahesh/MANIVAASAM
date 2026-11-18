@@ -41,6 +41,7 @@ export default function ComplaintsPage() {
   const [newCategory, setNewCategory] = useState('')
   const [newPriority, setNewPriority] = useState('medium')
   const [newDescription, setNewDescription] = useState('')
+  const [newAgainst, setNewAgainst] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
   // Assign dialog
@@ -60,7 +61,7 @@ export default function ComplaintsPage() {
   }, [])
 
   const filtered = complaints.filter((c: any) => {
-    const matchSearch = !search || [c.flatNumber, c.residentName, c.description, c.id, c._id].some(
+    const matchSearch = !search || [c.flatNumber, c.againstFlatNumber, c.residentName, c.description, c.id, c._id].some(
       (v: string) => v?.toLowerCase().includes(search.toLowerCase())
     )
     const matchStatus = statusFilter === 'all' || c.status === statusFilter
@@ -86,10 +87,11 @@ export default function ComplaintsPage() {
         category: newCategory,
         priority: newPriority,
         description: newDescription.trim(),
+        againstFlatNumber: newAgainst.trim() || undefined,
         comments: [],
       })
       setNewOpen(false)
-      setNewFlat(''); setNewResident(''); setNewCategory(''); setNewPriority('medium'); setNewDescription('')
+      setNewFlat(''); setNewResident(''); setNewCategory(''); setNewPriority('medium'); setNewDescription(''); setNewAgainst('')
       toast({ title: 'Complaint filed', description: 'New complaint has been submitted.', variant: 'success' })
     } catch {
       toast({ title: 'Error', description: 'Failed to file complaint.', variant: 'destructive' })
@@ -204,8 +206,18 @@ export default function ComplaintsPage() {
                   {filtered.map((c: any) => (
                     <tr key={c._id || c.id} className="hover:bg-slate-50/50 transition-colors">
                       <td className="px-4 py-3.5 font-mono font-medium text-indigo-600">{(c._id || c.id)?.slice(-6).toUpperCase()}</td>
-                      <td className="px-4 py-3.5 font-semibold text-slate-900">{c.flatNumber}</td>
-                      <td className="px-4 py-3.5 text-slate-700">{c.residentName}</td>
+                      <td className="px-4 py-3.5 font-semibold text-slate-900">
+                        {c.flatNumber}
+                        {c.againstFlatNumber && (
+                          <span className="block text-[11px] font-medium text-red-600">against {c.againstFlatNumber}</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3.5 text-slate-700">
+                        {c.residentName}
+                        {c.raisedBy === 'resident' && (
+                          <span className="block text-[11px] text-indigo-600">via Resident Portal</span>
+                        )}
+                      </td>
                       <td className="px-4 py-3.5 text-slate-600">{categoryLabels[c.category] || c.category}</td>
                       <td className="px-4 py-3.5"><PriorityBadge priority={c.priority} /></td>
                       <td className="px-4 py-3.5"><ComplaintStatusBadge status={c.status} /></td>
@@ -289,6 +301,10 @@ export default function ComplaintsPage() {
                   </SelectContent>
                 </Select>
               </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Against Flat (optional)</Label>
+              <Input placeholder="e.g. B-202 — flat responsible for the issue" value={newAgainst} onChange={(e) => setNewAgainst(e.target.value)} />
             </div>
             <div className="space-y-1.5">
               <Label>Description <span className="text-red-500">*</span></Label>

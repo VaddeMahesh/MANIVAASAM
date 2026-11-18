@@ -11,7 +11,7 @@ import { useAppStore } from '@/store'
 
 export default function SignupPage() {
   const router = useRouter()
-  const { setAuthToken } = useAppStore()
+  const { setAuthToken, logout, fetchProfile } = useAppStore()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -41,7 +41,11 @@ export default function SignupPage() {
       const response = await authAPI.signup(data)
       const token = response.token || response.data?.token
       if (token) {
+        // Clear any previous session (apartment name, society code, cached data) before switching
+        logout()
         setAuthToken(token)
+        useAppStore.setState({ userRole: 'admin' })
+        await fetchProfile()
         router.push('/dashboard')
       } else {
         router.push('/login')

@@ -24,7 +24,7 @@ const navItems = [
 
 export function Sidebar() {
   const pathname = usePathname()
-  const { sidebarOpen, setSidebarOpen, apartmentName, pendingVerifications } = useAppStore()
+  const { sidebarOpen, setSidebarOpen, apartmentName, societyCode, pendingVerifications } = useAppStore()
 
   return (
     <>
@@ -51,7 +51,10 @@ export function Sidebar() {
           </div>
           <div className="min-w-0">
             <p className="truncate text-sm font-bold tracking-tight text-slate-900">MANIVAASAM</p>
-            <p className="truncate text-xs text-slate-400">{apartmentName || 'My Apartment'}</p>
+            <p className="truncate text-xs text-slate-400">
+              {apartmentName || 'My Apartment'}
+              {societyCode && <span className="ml-1 font-mono font-semibold text-indigo-600">· {societyCode}</span>}
+            </p>
           </div>
           <button
             onClick={() => setSidebarOpen(false)}

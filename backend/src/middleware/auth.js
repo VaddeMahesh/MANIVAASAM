@@ -58,7 +58,13 @@ exports.protect = async (req, res, next) => {
   }
 };
 
-exports.generateToken = (user, extra = {}) => {
+// Must run after `protect`. Blocks resident (owner/tenant) tokens from admin-only routes.
+exports.adminOnly = (req, res, next) => {
+  if (req.resident) return next(new AppError('This action is only available to the society admin', 403));
+  next();
+};
+
+exports.generateToken =(user, extra = {}) => {
   return jwt.sign(
     {
       id: user._id,

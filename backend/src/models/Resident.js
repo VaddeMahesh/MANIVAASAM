@@ -55,7 +55,8 @@ const residentSchema = new mongoose.Schema({
 });
 
 residentSchema.index({ apartmentId: 1, flatNumber: 1 });
-residentSchema.index({ email: 1 });
+// One account per email across the whole system (email login must resolve to exactly one resident)
+residentSchema.index({ email: 1 }, { unique: true });
 
 // Hash password before saving
 residentSchema.pre('save', async function(next) {

@@ -17,6 +17,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { useAppStore } from '@/store'
 import { useToast } from '@/hooks/use-toast'
 import { getInitials } from '@/lib/utils'
+import { SocietyCodeCard, buildInviteMessage, whatsappUrl } from '@/components/shared/society-code-card'
 import type { Flat } from '@/types'
 
 const emptyForm = {
@@ -25,7 +26,7 @@ const emptyForm = {
 }
 
 export default function FlatsPage() {
-  const { flats, fetchFlats, addFlat, updateFlat } = useAppStore()
+  const { flats, fetchFlats, addFlat, updateFlat, societyCode, apartmentName, fetchProfile } = useAppStore()
   const { toast } = useToast()
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
@@ -40,6 +41,7 @@ export default function FlatsPage() {
 
   useEffect(() => {
     fetchFlats()
+    if (!societyCode) fetchProfile()
   }, [fetchFlats])
 
   const filtered = flats.filter((f) => {
@@ -49,6 +51,21 @@ export default function FlatsPage() {
     const matchStatus = statusFilter === 'all' || f.occupancyStatus === statusFilter
     return matchSearch && matchStatus
   })
+
+  // Send this flat's resident a WhatsApp invite with the society code and registration link
+  function inviteFlat(flat: Flat) {
+    if (!societyCode) {
+      toast({ title: 'Society Code not loaded', description: 'Refresh the page and try again.', variant: 'destructive' })
+      return
+    }
+    const phone = (flat.tenantName ? flat.tenantMobile : flat.ownerMobile) || flat.ownerMobile
+    // Bill import fills unknown numbers with 9999999999; open WhatsApp without a recipient in that case
+    const usablePhone = phone && !/^9{10}$/.test(phone.replace(/\D/g, '')) ? phone : undefined
+    window.open(whatsappUrl(buildInviteMessage(societyCode, apartmentName, flat.flatNumber), usablePhone), '_blank', 'noopener')
+    if (!usablePhone) {
+      toast({ title: 'No mobile number on file', description: 'WhatsApp opened without a contact. Choose the resident there.' })
+    }
+  }
 
   function openView(flat: Flat) {
     setViewingFlat(flat)
@@ -126,6 +143,8 @@ export default function FlatsPage() {
           Add Flat
         </Button>
       </PageHeader>
+
+      <SocietyCodeCard code={societyCode} apartmentName={apartmentName} />
 
       {/* Summary chips */}
       <div className="flex flex-wrap gap-3">
@@ -218,7 +237,9 @@ export default function FlatsPage() {
                           <DropdownMenuContent align="end">
                             <DropdownMenuItem onClick={() => openView(flat)}><Eye className="mr-2 h-4 w-4" />View</DropdownMenuItem>
                             <DropdownMenuItem onClick={() => openEdit(flat)}><Edit className="mr-2 h-4 w-4" />Edit</DropdownMenuItem>
-                            <DropdownMenuItem><Share2 className="mr-2 h-4 w-4" />Share</DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => inviteFlat(flat)}>
+                              <Share2 className="mr-2 h-4 w-4" />Invite via WhatsApp
+                            </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </td>

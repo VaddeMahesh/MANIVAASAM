@@ -6,6 +6,10 @@ exports.getProfile = async (req, res, next) => {
   try {
     const admin = await Admin.findById(req.admin._id).populate('apartmentId');
     if (!admin) return next(new AppError('Admin not found', 404));
+    // Older societies may not have a code yet: assign one now so the admin can share it
+    if (admin.apartmentId && !admin.apartmentId.societyCode) {
+      admin.apartmentId.societyCode = await Apartment.ensureSocietyCode(admin.apartmentId);
+    }
     res.json({ success: true, data: admin });
   } catch (error) { next(error); }
 };

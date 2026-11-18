@@ -18,7 +18,13 @@ exports.listApartments = async (req, res, next) => {
 
 exports.updateApartment = async (req, res, next) => {
   try {
-    const apartment = await Apartment.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
+    // Admins may only edit their own society
+    if (String(req.admin.apartmentId) !== String(req.params.id)) {
+      return next(new AppError('You can only update your own apartment', 403));
+    }
+    // societyCode is system-generated and shared with residents; changing it would break their logins
+    const { societyCode, adminId, _id, ...updates } = req.body;
+    const apartment = await Apartment.findByIdAndUpdate(req.params.id, updates, { new: true, runValidators: true });
     if (!apartment) return next(new AppError('Apartment not found', 404));
     res.json({ success: true, data: apartment });
   } catch (error) { next(error); }

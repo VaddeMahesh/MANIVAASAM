@@ -58,6 +58,22 @@ const complaintSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Admin',
     sparse: true
+  },
+  // Who filed the complaint: society admin or a flat resident (owner/tenant)
+  raisedBy: {
+    type: String,
+    enum: ['admin', 'resident'],
+    default: 'admin'
+  },
+  residentId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Resident',
+    sparse: true
+  },
+  // Optional: the flat this complaint is raised against (e.g. noise, parking misuse)
+  againstFlatNumber: {
+    type: String,
+    trim: true
   }
 }, {
   timestamps: true
@@ -70,6 +86,8 @@ complaintSchema.virtual('date').get(function () {
 complaintSchema.index({ apartmentId: 1, status: 1 });
 complaintSchema.index({ apartmentId: 1, priority: 1 });
 complaintSchema.index({ flatId: 1 });
+complaintSchema.index({ apartmentId: 1, flatNumber: 1 });
+complaintSchema.index({ apartmentId: 1, againstFlatNumber: 1 });
 complaintSchema.index({ createdAt: -1 });
 
 complaintSchema.set('toJSON', { virtuals: true });

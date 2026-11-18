@@ -1,10 +1,17 @@
 const mongoose = require('mongoose');
+const { normalizeFlatNumber, toFlatKey } = require('../utils/flatKey');
 
 const flatSchema = new mongoose.Schema({
   flatNumber: {
     type: String,
     required: [true, 'Flat number is required'],
     trim: true
+  },
+  // Derived from flatNumber ("A-101" -> "A101"); unique per apartment so "A101" and "A-101"
+  // cannot be saved as two different flats. Always set automatically, never by clients.
+  flatKey: {
+    type: String,
+    index: false
   },
   apartmentId: {
   type: mongoose.Schema.Types.ObjectId,
@@ -138,8 +145,32 @@ flatSchema.pre('save', async function(next) {
   next();
 });
 
+// Keep flatNumber tidy and flatKey in sync on create/save
+flatSchema.pre('validate', function () {
+  if (this.flatNumber) {
+    this.flatNumber = normalizeFlatNumber(this.flatNumber);
+    this.flatKey = toFlatKey(this.flatNumber);
+  }
+});
+
+// ...and on findByIdAndUpdate / findOneAndUpdate (used by the admin "edit flat" API)
+flatSchema.pre(['findOneAndUpdate', 'updateOne'], function () {
+  const update = this.getUpdate() || {};
+  const target = update.$set || update;
+  if (target.flatNumber) {
+    target.flatNumber = normalizeFlatNumber(target.flatNumber);
+    target.flatKey = toFlatKey(target.flatNumber);
+  } else if ('flatKey' in target) {
+    delete target.flatKey; // derived field, never client-controlled
+  }
+});
+
 // Index for faster queries
 flatSchema.index({ apartmentId: 1, flatNumber: 1 }, { unique: true });
+flatSchema.index(
+  { apartmentId: 1, flatKey: 1 },
+  { unique: true, partialFilterExpression: { flatKey: { $type: 'string' } } }
+);
 flatSchema.index({ 'owner.email': 1 });
 flatSchema.index({ isCommitteeMember: 1 });
 flatSchema.index({ status: 1 });

@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -e \"require\\('./src/routes/authRoutes'\\); console.log\\('auth routes load ok'\\)\")",
+      "Bash(node -p \"require\\('mongoose/package.json'\\).version\")",
+      "Bash(node scripts/migrate-society-codes.js --apply)",
+      "Bash(node -e \"const s=require\\('fs'\\).readFileSync\\('src/controllers/authController.js','utf8'\\);console.log\\('CR count',\\(s.match\\(/\\\\r/g\\)||[]\\).length,'lines',s.split\\('\\\\n'\\).length\\)\")",
+      "Bash(node --check src/controllers/authController.js)",
+      "Bash(curl -s -m 15 -o /dev/null -w \"%{http_code}\\\\n\" \"http://localhost:3000/login?society=SRI6817&register=1\")"
+    ]
+  }
+}

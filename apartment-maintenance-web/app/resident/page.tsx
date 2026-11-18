@@ -4,8 +4,9 @@ import { useRouter } from 'next/navigation'
 import {
   Building, LogOut, Receipt, CreditCard, Droplets, CheckCircle2,
   Clock, AlertCircle, Upload, Eye, X, FileText, ArrowRight, ShieldCheck,
-  Calendar, Phone, User, Landmark, ChevronRight, Sparkles, RefreshCw, AlertTriangle, Check
+  Calendar, Phone, User, Landmark, ChevronRight, Sparkles, RefreshCw, AlertTriangle, Check, MessageSquareWarning
 } from 'lucide-react'
+import { ResidentComplaints } from '@/components/resident/resident-complaints'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -333,7 +334,12 @@ export default function ResidentPortalPage() {
                 </Badge>
               </div>
               <p className="text-xs text-slate-500 font-medium">
-                Flat: <span className="text-indigo-600 font-bold">{residentProfile?.flatNumber || residentFlatData?.flat?.flatNumber || 'A-104'}</span> ({residentProfile?.role || 'Owner'})
+                Flat: <span className="text-indigo-600 font-bold">
+                  {(residentFlatData?.flat?.societyCode || residentProfile?.societyCode) && (
+                    <span className="font-mono">{residentFlatData?.flat?.societyCode || residentProfile?.societyCode} / </span>
+                  )}
+                  {residentProfile?.flatNumber || residentFlatData?.flat?.flatNumber || 'A-104'}
+                </span> ({residentProfile?.role || 'Owner'})
               </p>
             </div>
           </div>
@@ -560,7 +566,16 @@ export default function ResidentPortalPage() {
               <CreditCard className="mr-1.5 h-3.5 w-3.5" />
               Payment History &amp; Receipts ({residentPayments.length})
             </TabsTrigger>
+            <TabsTrigger value="complaints" className="text-xs data-[state=active]:bg-indigo-600 data-[state=active]:text-white">
+              <MessageSquareWarning className="mr-1.5 h-3.5 w-3.5" />
+              Complaints
+            </TabsTrigger>
           </TabsList>
+
+          {/* TAB 3: Complaints raised by / against this flat */}
+          <TabsContent value="complaints" className="space-y-4">
+            <ResidentComplaints />
+          </TabsContent>
 
           {/* TAB 1: Current Bill & Water Meter Breakdown */}
           <TabsContent value="overview" className="space-y-4">

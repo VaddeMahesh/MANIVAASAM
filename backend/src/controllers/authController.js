@@ -7,6 +7,7 @@ const crypto = require('crypto');
 const AppError = require('../utils/AppError');
 const { sendEmail } = require('../services/emailService');
 const { generateToken } = require('../middleware/auth');
+const { normalizeFlatNumber, toFlatKey, normalizeSocietyCode } = require('../utils/flatKey');
 
 exports.signup = async (req, res, next) => {
   try {
@@ -27,7 +28,19 @@ exports.signup = async (req, res, next) => {
 
     const token = generateToken(admin);
 
-    res.status(201).json({ success: true, data: { admin: { id: admin._id, email: admin.email }, token } });
+    res.status(201).json({
+      success: true,
+      data: {
+        admin: {
+          id: admin._id,
+          email: admin.email,
+          apartmentId: apartment._id,
+          apartmentName: apartment.apartmentName,
+          societyCode: apartment.societyCode,
+        },
+        token,
+      },
+    });
   } catch (error) {
     next(error);
   }
@@ -48,6 +61,10 @@ exports.login = async (req, res, next) => {
     await admin.save();
 
     const apartment = admin.apartmentId;
+    // Older societies may not have a code yet: assign one now so the admin can share it
+    if (apartment && !apartment.societyCode) {
+      apartment.societyCode = await Apartment.ensureSocietyCode(apartment);
+    }
     res.json({
       success: true,
       data: {
@@ -133,51 +150,67 @@ exports.changePassword = async (req, res, next) => {
   }
 };
 
-// Resident (Flat Owner / Tenant) Signup
+// ==================== RESIDENT (FLAT OWNER / TENANT) AUTH ====================
+// A flat is identified by Society Code + Flat Number (e.g. SRI4821 / A-101), because the same
+// flat number exists in many societies. Email login stays available (emails are unique).
+
+const residentPayload = (resident, apartment) => ({
+  id: resident._id,
+  name: resident.name,
+  email: resident.email,
+  phoneNumber: resident.phoneNumber,
+  flatNumber: resident.flatNumber,
+  role: resident.role,
+  flatId: resident.flatId?._id || resident.flatId,
+  apartmentId: apartment?._id || resident.apartmentId,
+  apartmentName: apartment?.apartmentName || 'Apartment Society',
+  societyCode: apartment?.societyCode,
+});
+
+const findSocietyByCode = (code) => {
+  const normalized = normalizeSocietyCode(code);
+  if (!normalized) return null;
+  return Apartment.findOne({ societyCode: normalized }).select('_id apartmentName societyCode status');
+};
+
+// Public: confirm a society code before registering ("SRI4821" -> "sri"). Returns name only.
+exports.lookupSociety = async (req, res, next) => {
+  try {
+    const apartment = await findSocietyByCode(req.params.code);
+    if (!apartment) return next(new AppError('No society found with this code. Please check with your society admin.', 404));
+    res.json({
+      success: true,
+      data: { apartmentName: apartment.apartmentName, societyCode: apartment.societyCode },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 exports.residentSignup = async (req, res, next) => {
   try {
-    const { email, password, name, phoneNumber, flatNumber, role = 'owner', apartmentId } = req.body;
+    const { email, password, name, phoneNumber, flatNumber, role = 'owner', societyCode } = req.body;
+    if (!societyCode) return next(new AppError('Please enter your Society Code (ask your society admin)', 400));
     if (!email || !password || !name || !flatNumber) {
       return next(new AppError('Please provide email, password, name, and flat number', 400));
     }
 
-    const normEmail = email.toLowerCase().trim();
-    const normFlat = flatNumber.toUpperCase().trim();
+    const apartment = await findSocietyByCode(societyCode);
+    if (!apartment) return next(new AppError('Invalid Society Code. Please check with your society admin.', 400));
 
-    // Check if resident with email already exists
-    const existingResident = await Resident.findOne({ email: normEmail });
-    if (existingResident) {
+    const normEmail = String(email).toLowerCase().trim();
+    if (await Resident.exists({ email: normEmail })) {
       return next(new AppError('An account with this email already exists. Please login.', 400));
     }
 
-    // Resolve apartment
-    let aptId = apartmentId;
-    if (!aptId) {
-      const defaultApt = await Apartment.findOne();
-      if (!defaultApt) return next(new AppError('Apartment not found in system', 404));
-      aptId = defaultApt._id;
-    }
-
-    // Find flat by flatNumber
-    let flat = await Flat.findOne({
-      apartmentId: aptId,
-      flatNumber: { $regex: new RegExp(`^${normFlat.replace(/[-]/g, '[-]?')}$`, 'i') },
-    });
-
+    // The flat must already exist in this society (added by the admin or via bill import).
+    // Flats are no longer auto-created here: a typo or wrong society used to create a bogus flat.
+    const flat = await Flat.findOne({ apartmentId: apartment._id, flatKey: toFlatKey(flatNumber) });
     if (!flat) {
-      // Auto-create flat
-      flat = await Flat.create({
-        flatNumber: normFlat,
-        apartmentId: aptId,
-        floorNumber: parseInt(normFlat.replace(/\D/g, '')?.[0] || '1', 10) || 1,
-        status: 'occupied',
-        occupationType: role === 'tenant' ? 'rented' : 'owner',
-        owner: {
-          name,
-          email: normEmail,
-          phoneNumber: phoneNumber || '9999999999',
-        },
-      });
+      return next(new AppError(
+        `Flat ${normalizeFlatNumber(flatNumber)} is not registered in ${apartment.apartmentName}. Please ask your society admin to add it.`,
+        400
+      ));
     }
 
     const resident = await Resident.create({
@@ -187,7 +220,7 @@ exports.residentSignup = async (req, res, next) => {
       phoneNumber,
       flatNumber: flat.flatNumber,
       flatId: flat._id,
-      apartmentId: flat.apartmentId,
+      apartmentId: apartment._id,
       role: role === 'tenant' ? 'tenant' : 'owner',
     });
 
@@ -195,71 +228,57 @@ exports.residentSignup = async (req, res, next) => {
 
     res.status(201).json({
       success: true,
-      data: {
-        resident: {
-          id: resident._id,
-          name: resident.name,
-          email: resident.email,
-          flatNumber: resident.flatNumber,
-          role: resident.role,
-          flatId: flat._id,
-          apartmentId: flat.apartmentId,
-        },
-        token,
-      },
+      data: { resident: residentPayload(resident, apartment), token },
     });
   } catch (error) {
+    if (error && error.code === 11000) {
+      return next(new AppError('An account with this email already exists. Please login.', 400));
+    }
     next(error);
   }
 };
 
-// Resident (Flat Owner / Tenant) Login
 exports.residentLogin = async (req, res, next) => {
   try {
-    const { emailOrFlat, password } = req.body;
+    const { emailOrFlat, password, societyCode } = req.body;
     if (!emailOrFlat || !password) {
       return next(new AppError('Please provide email or flat number and password', 400));
     }
 
-    const input = emailOrFlat.trim();
+    const input = String(emailOrFlat).trim();
     const isEmail = input.includes('@');
+    const invalid = () => next(new AppError(
+      'Incorrect login details. First time here? Use "Register Flat Resident Account".',
+      401
+    ));
 
-    let query = {};
+    // NOTE: accounts are never auto-created on login (that let anyone claim an unregistered flat).
+    let resident = null;
+
     if (isEmail) {
-      query.email = input.toLowerCase();
+      resident = await Resident.findOne({ email: input.toLowerCase() }).select('+password').populate('apartmentId');
+      if (!resident || !(await resident.comparePassword(password))) return invalid();
     } else {
-      query.flatNumber = { $regex: new RegExp(`^${input.replace(/[-]/g, '[-]?')}$`, 'i') };
-    }
-
-    let resident = await Resident.findOne(query).select('+password').populate('apartmentId');
-
-    // If resident doesn't exist yet, check if Flat exists in DB so we can auto-provision seamlessly
-    if (!resident) {
-      const flatQuery = isEmail
-        ? { 'owner.email': input.toLowerCase() }
-        : { flatNumber: { $regex: new RegExp(`^${input.replace(/[-]/g, '[-]?')}$`, 'i') } };
-
-      const flat = await Flat.findOne(flatQuery);
-      if (flat) {
-        const resEmail = isEmail ? input.toLowerCase() : (flat.owner?.email || `${flat.flatNumber.toLowerCase().replace(/[^a-z0-9]/g, '')}@apartment.com`);
-        const resName = flat.owner?.name || `Resident ${flat.flatNumber}`;
-
-        resident = await Resident.create({
-          email: resEmail,
-          password: password,
-          name: resName,
-          phoneNumber: flat.owner?.phoneNumber || '9999999999',
-          flatNumber: flat.flatNumber,
-          flatId: flat._id,
-          apartmentId: flat.apartmentId,
-          role: flat.occupationType === 'rented' ? 'tenant' : 'owner',
-        });
-        resident = await Resident.findById(resident._id).select('+password').populate('apartmentId');
+      if (!societyCode) {
+        return next(new AppError('Please enter your Society Code with your flat number, or sign in with your email.', 400));
       }
-    }
+      const apartment = await findSocietyByCode(societyCode);
+      if (!apartment) return invalid();
 
-    if (!resident || !(await resident.comparePassword(password))) {
-      return next(new AppError('Incorrect flat number/email or password', 401));
+      const flat = await Flat.findOne({ apartmentId: apartment._id, flatKey: toFlatKey(input) }).select('_id');
+      if (!flat) return invalid();
+
+      // Owner and tenant can share a flat; pick the account whose password matches.
+      const candidates = await Resident.find({ flatId: flat._id }).select('+password').populate('apartmentId');
+      const matches = [];
+      for (const r of candidates) {
+        if (await r.comparePassword(password)) matches.push(r);
+      }
+      if (matches.length === 0) return invalid();
+      if (matches.length > 1) {
+        return next(new AppError('More than one account on this flat uses this password. Please sign in with your email.', 409));
+      }
+      resident = matches[0];
     }
 
     resident.lastLogin = Date.now();
@@ -269,20 +288,7 @@ exports.residentLogin = async (req, res, next) => {
 
     res.json({
       success: true,
-      data: {
-        resident: {
-          id: resident._id,
-          name: resident.name,
-          email: resident.email,
-          phoneNumber: resident.phoneNumber,
-          flatNumber: resident.flatNumber,
-          role: resident.role,
-          flatId: resident.flatId,
-          apartmentId: resident.apartmentId?._id || resident.apartmentId,
-          apartmentName: resident.apartmentId?.apartmentName || 'Apartment Society',
-        },
-        token,
-      },
+      data: { resident: residentPayload(resident, resident.apartmentId), token },
     });
   } catch (error) {
     next(error);
@@ -294,6 +300,9 @@ exports.getMe = async (req, res, next) => {
   try {
     if (req.user?.role === 'admin') {
       const admin = await Admin.findById(req.user.id).populate('apartmentId');
+      if (admin.apartmentId && !admin.apartmentId.societyCode) {
+        admin.apartmentId.societyCode = await Apartment.ensureSocietyCode(admin.apartmentId);
+      }
       return res.json({
         success: true,
         data: {
@@ -305,6 +314,7 @@ exports.getMe = async (req, res, next) => {
             lastName: admin.lastName,
             apartmentId: admin.apartmentId?._id,
             apartmentName: admin.apartmentId?.apartmentName,
+            societyCode: admin.apartmentId?.societyCode,
           },
         },
       });

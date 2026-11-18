@@ -19,10 +19,11 @@ interface AppState {
     flatId: string
     apartmentId: string
     apartmentName?: string
+    societyCode?: string
   } | null
   setAuthToken: (token: string | null) => void
   login: (email: string, password: string) => Promise<any>
-  residentLogin: (emailOrFlat: string, password: string) => Promise<any>
+  residentLogin: (emailOrFlat: string, password: string, societyCode?: string) => Promise<any>
   residentSignup: (data: any) => Promise<any>
   logout: () => void
 
@@ -30,8 +31,11 @@ interface AppState {
   residentFlatData: any | null
   residentBills: any[]
   residentPayments: any[]
+  residentComplaints: { raised: any[]; against: any[] }
   fetchResidentData: () => Promise<void>
+  fetchResidentComplaints: () => Promise<void>
   submitResidentPayment: (data: Parameters<typeof residentAPI.submitPayment>[0]) => Promise<any>
+  submitResidentComplaint: (data: Parameters<typeof residentAPI.submitComplaint>[0]) => Promise<any>
 
   // Admin Verification State
   pendingVerifications: any[]
@@ -93,6 +97,7 @@ interface AppState {
   // Profile
   apartmentName: string
   apartmentId: string
+  societyCode: string
   fetchProfile: () => Promise<void>
 }
 
@@ -176,6 +181,7 @@ export const useAppStore = create<AppState>()(
       residentFlatData: null,
       residentBills: [],
       residentPayments: [],
+      residentComplaints: { raised: [], against: [] },
       pendingVerifications: [],
 
       setAuthToken: (token) => set({ authToken: token, isAuthenticated: !!token }),
@@ -188,6 +194,7 @@ export const useAppStore = create<AppState>()(
             const adminData = response.data?.admin || response.admin
             const aptId = adminData?.apartmentId
             const aptName = adminData?.apartmentName || adminData?.apartment?.apartmentName
+            const code = adminData?.societyCode || adminData?.apartment?.societyCode
             set({
               authToken: token,
               isAuthenticated: true,
@@ -195,6 +202,7 @@ export const useAppStore = create<AppState>()(
               residentProfile: null,
               ...(aptId ? { apartmentId: String(aptId) } : {}),
               ...(aptName ? { apartmentName: aptName } : {}),
+              societyCode: code || '',
             })
             return response
           } else {
@@ -209,10 +217,10 @@ export const useAppStore = create<AppState>()(
         }
       },
 
-      residentLogin: async (emailOrFlat, password) => {
+      residentLogin: async (emailOrFlat, password, societyCode) => {
         try {
           set({ isLoading: true, error: null })
-          const response = await authAPI.residentLogin({ emailOrFlat, password })
+          const response = await authAPI.residentLogin({ emailOrFlat, password, societyCode })
           const token = response.token || response.data?.token
           const resident = response.data?.resident || response.resident
           if (token && resident) {
@@ -223,6 +231,7 @@ export const useAppStore = create<AppState>()(
               residentProfile: resident,
               apartmentId: resident.apartmentId ? String(resident.apartmentId) : '',
               apartmentName: resident.apartmentName || 'Apartment Society',
+              societyCode: resident.societyCode || '',
             })
             return response
           }
@@ -250,6 +259,7 @@ export const useAppStore = create<AppState>()(
               residentProfile: resident,
               apartmentId: resident.apartmentId ? String(resident.apartmentId) : '',
               apartmentName: resident.apartmentName || 'Apartment Society',
+              societyCode: resident.societyCode || '',
             })
             return response
           }
@@ -266,15 +276,20 @@ export const useAppStore = create<AppState>()(
       fetchResidentData: async () => {
         try {
           set({ isLoading: true })
-          const [flatRes, billsRes, paymentsRes] = await Promise.all([
+          const [flatRes, billsRes, paymentsRes, complaintsRes] = await Promise.all([
             residentAPI.getMyFlat().catch(() => null),
             residentAPI.getMyBills().catch(() => ({ data: [] })),
             residentAPI.getMyPayments().catch(() => ({ data: [] })),
+            residentAPI.getMyComplaints().catch(() => null),
           ])
           set({
             residentFlatData: flatRes?.data || null,
             residentBills: billsRes?.data || [],
             residentPayments: paymentsRes?.data || [],
+            residentComplaints: {
+              raised: complaintsRes?.data?.raised || [],
+              against: complaintsRes?.data?.against || [],
+            },
           })
         } catch (err) {
           console.error('Failed to fetch resident data:', err)
@@ -294,6 +309,22 @@ export const useAppStore = create<AppState>()(
         } finally {
           set({ isLoading: false })
         }
+      },
+
+      fetchResidentComplaints: async () => {
+        const res = await residentAPI.getMyComplaints()
+        set({
+          residentComplaints: {
+            raised: res?.data?.raised || [],
+            against: res?.data?.against || [],
+          },
+        })
+      },
+
+      submitResidentComplaint: async (data) => {
+        const res = await residentAPI.submitComplaint(data)
+        await get().fetchResidentComplaints()
+        return res
       },
 
       fetchPendingVerifications: async () => {
@@ -327,9 +358,11 @@ export const useAppStore = create<AppState>()(
         residentFlatData: null,
         residentBills: [],
         residentPayments: [],
+        residentComplaints: { raised: [], against: [] },
         pendingVerifications: [],
         apartmentName: '',
         apartmentId: '',
+        societyCode: '',
         flats: [],
         expenses: [],
         bills: [],
@@ -346,6 +379,7 @@ export const useAppStore = create<AppState>()(
       // Profile
       apartmentName: '',
       apartmentId: '',
+      societyCode: '',
       fetchProfile: async () => {
         try {
           const response = await adminAPI.getProfile()
@@ -353,8 +387,11 @@ export const useAppStore = create<AppState>()(
           const rawAptId = admin?.apartmentId
           const aptId = typeof rawAptId === 'object' ? rawAptId?._id : rawAptId
           const name = (typeof rawAptId === 'object' ? rawAptId?.apartmentName : '') || ''
+          const code = (typeof rawAptId === 'object' ? rawAptId?.societyCode : '') || ''
           if (name) set({ apartmentName: name })
           if (aptId) set({ apartmentId: aptId })
+          // Always overwrite: keeping a previous admin's code (persisted in localStorage) shows the wrong society
+          set({ societyCode: code })
         } catch (_) {}
       },
 
@@ -702,7 +739,7 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'apartment-app-storage',
-      partialize: (state) => ({ isAuthenticated: state.isAuthenticated, authToken: state.authToken, sidebarOpen: state.sidebarOpen, apartmentId: state.apartmentId, apartmentName: state.apartmentName }),
+      partialize: (state) => ({ isAuthenticated: state.isAuthenticated, authToken: state.authToken, sidebarOpen: state.sidebarOpen, apartmentId: state.apartmentId, apartmentName: state.apartmentName, societyCode: state.societyCode }),
     }
   )
 )

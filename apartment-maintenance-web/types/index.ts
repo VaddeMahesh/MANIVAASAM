@@ -114,6 +114,8 @@ export interface Complaint {
   resolution?: string
   comments: ComplaintComment[]
   images?: string[]
+  raisedBy?: 'admin' | 'resident'
+  againstFlatNumber?: string
 }
 
 // Notifications

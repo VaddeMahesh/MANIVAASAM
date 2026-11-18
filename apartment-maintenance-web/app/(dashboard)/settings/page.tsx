@@ -15,6 +15,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/hooks/use-toast'
 import { adminAPI, authAPI, apartmentAPI } from '@/lib/api'
+import { SocietyCodeCard } from '@/components/shared/society-code-card'
 
 function ReadOnlyField({ label, value, icon: Icon }: { label: string; value: string; icon?: React.ElementType }) {
   return (
@@ -40,6 +41,7 @@ export default function SettingsPage() {
 
   // Apartment state
   const [apartmentId, setApartmentId] = useState('')
+  const [societyCode, setSocietyCode] = useState('')
   const [apartment, setApartment] = useState({
     apartmentName: '',
     street: '', city: '', state: '', pinCode: '',
@@ -80,6 +82,7 @@ export default function SettingsPage() {
       const apt = typeof data.apartmentId === 'object' ? data.apartmentId : null
       if (apt) {
         setApartmentId(apt._id || '')
+        setSocietyCode(apt.societyCode || '')
         setApartment({
           apartmentName: apt.apartmentName || '',
           street: apt.address?.street || '',
@@ -173,6 +176,7 @@ export default function SettingsPage() {
 
         {/* Apartment Settings */}
         <TabsContent value="apartment" className="mt-6 space-y-4">
+          <SocietyCodeCard code={societyCode} apartmentName={apartment.apartmentName} />
           <Card>
             <CardHeader>
               <CardTitle>Apartment Details</CardTitle>

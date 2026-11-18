@@ -12,6 +12,7 @@ router.post('/signup', [
 ], authController.signup);
 
 router.post('/login', authController.login);
+router.get('/society/:code', authController.lookupSociety);
 router.post('/resident-signup', authController.residentSignup);
 router.post('/resident-login', authController.residentLogin);
 router.get('/me', protect, authController.getMe);

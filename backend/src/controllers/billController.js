@@ -2,6 +2,7 @@ const { validationResult } = require('express-validator');
 const Bill = require('../models/Bill');
 const Flat = require('../models/Flat');
 const AppError = require('../utils/AppError');
+const { toFlatKey } = require('../utils/flatKey');
 
 exports.listBills = async (req, res, next) => {
   try {
@@ -153,8 +154,9 @@ exports.bulkImportBills = async (req, res, next) => {
     // Fetch existing flats for this apartment
     const existingFlats = await Flat.find({ apartmentId });
     const flatMap = new Map();
+    // Key by flatKey so "A101" in the sheet matches an existing "A-101" instead of creating a duplicate
     existingFlats.forEach((f) => {
-      flatMap.set(f.flatNumber.toUpperCase().trim(), f);
+      flatMap.set(toFlatKey(f.flatNumber), f);
     });
 
     const updatedBills = [];
@@ -167,7 +169,7 @@ exports.bulkImportBills = async (req, res, next) => {
         continue;
       }
 
-      let flat = flatMap.get(flatNum);
+      let flat = flatMap.get(toFlatKey(flatNum));
       if (!flat) {
         // Derive floor from flat number: G1 -> 1, A-101 -> 1, A-201 -> 2, etc.
         let floor = 1;
@@ -195,7 +197,7 @@ exports.bulkImportBills = async (req, res, next) => {
             pendingDueAmount: Number(item.amount || item.totalAmount || 0),
           },
         });
-        flatMap.set(flatNum, flat);
+        flatMap.set(toFlatKey(flatNum), flat);
         createdFlats.push(flat);
       }
 

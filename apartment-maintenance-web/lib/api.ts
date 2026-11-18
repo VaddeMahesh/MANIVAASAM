@@ -105,7 +105,7 @@ export const authAPI = {
     return response
   },
 
-  residentLogin: async (data: { emailOrFlat: string; password: string }) => {
+  residentLogin: async (data: { emailOrFlat: string; password: string; societyCode?: string }) => {
     return fetchApi<any>('/auth/resident-login', {
       method: 'POST',
       body: JSON.stringify(data),
@@ -120,12 +120,18 @@ export const authAPI = {
     phoneNumber?: string
     flatNumber: string
     role?: 'owner' | 'tenant'
+    societyCode: string
   }) => {
     return fetchApi<any>('/auth/resident-signup', {
       method: 'POST',
       body: JSON.stringify(data),
       requiresAuth: false,
     })
+  },
+
+  // Confirms a society code and returns the society name (public)
+  lookupSociety: async (code: string) => {
+    return fetchApi<any>(`/auth/society/${encodeURIComponent(code)}`, { method: 'GET', requiresAuth: false })
   },
 
   getMe: async () => {
@@ -499,6 +505,22 @@ export const residentAPI = {
       body: JSON.stringify(data),
     })
   },
+
+  getMyComplaints: async () => {
+    return fetchApi<any>('/resident/my-complaints', { method: 'GET' })
+  },
+
+  submitComplaint: async (data: {
+    category: string
+    description: string
+    priority?: string
+    againstFlatNumber?: string
+  }) => {
+    return fetchApi<any>('/resident/complaints', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+  },
 }
 
 // ==================== COMPLAINTS API ====================
@@ -515,6 +537,7 @@ export const complaintsAPI = {
     description: string
     priority?: string
     flatId?: string
+    againstFlatNumber?: string
   }) => {
     return fetchApi<any>('/complaints', { method: 'POST', body: JSON.stringify(data) })
   },

@@ -12,8 +12,11 @@ const errorHandler = (err, req, res, next) => {
 
   // Mongoose duplicate key error
   if (err.code === 11000) {
-    const field = Object.keys(err.keyValue)[0];
-    const message = `${field.charAt(0).toUpperCase() + field.slice(1)} already exists`;
+    const keys = Object.keys(err.keyValue || {});
+    const field = keys.find((k) => k !== 'apartmentId') || keys[0] || 'Record';
+    const message = (field === 'flatKey' || field === 'flatNumber')
+      ? 'This flat number already exists in this apartment (e.g. "A101" and "A-101" are treated as the same flat)'
+      : `${field.charAt(0).toUpperCase() + field.slice(1)} already exists`;
     err = new AppError(message, 400);
   }
 
