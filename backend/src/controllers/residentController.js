@@ -23,21 +23,34 @@ exports.getMyFlat = async (req, res, next) => {
     const flat = await Flat.findById(resident.flatId || resident.flatId?._id).populate('apartmentId');
     if (!flat) return next(new AppError('Flat record not found', 404));
 
-    // Get latest bill
-    const latestBill = await Bill.findOne({
-      $or: [{ flatId: flat._id }, { flatNumber: flat.flatNumber }]
-    }).sort({ billingMonth: -1 });
+    const aptId = flat.apartmentId?._id || flat.apartmentId;
+    const flatNum = flat.flatNumber;
 
-    // Calculate pending dues accurately from all bills
-    const allBills = await Bill.find({
-      $or: [{ flatId: flat._id }, { flatNumber: flat.flatNumber }]
-    });
+    // Get latest bill matching flatId or flatNumber variants
+    const billQuery = {
+      $or: [
+        { flatId: flat._id },
+        { flatNumber: flatNum },
+        { flatNumber: flatNumberMatch(flatNum) },
+        { flatNumber: toFlatKey(flatNum) }
+      ]
+    };
+    if (aptId) billQuery.apartmentId = aptId;
 
-    const pendingTotal = allBills.reduce((sum, b) => {
-      if (b.status === 'paid') return sum;
-      const due = (b.amount || 0) + (b.penalty || 0) - (b.paidAmount || 0);
-      return sum + Math.max(0, due);
-    }, 0);
+    const latestBill = await Bill.findOne(billQuery).sort({ billingMonth: -1 });
+    const allBills = await Bill.find(billQuery).sort({ billingMonth: -1 });
+
+    let pendingTotal = 0;
+    if (allBills.length > 0) {
+      pendingTotal = allBills.reduce((sum, b) => {
+        if (b.status === 'paid') return sum;
+        const due = (b.amount || 0) + (b.penalty || 0) - (b.paidAmount || 0);
+        return sum + Math.max(0, due);
+      }, 0);
+    } else {
+      // If no bills generated yet, use flat dues configured by admin
+      pendingTotal = Number(flat.dues?.pendingDueAmount ?? flat.dues?.totalDueAmount ?? 0);
+    }
 
     // Sync flat dues object so both admin and resident see identical numbers
     const dues = {
@@ -83,12 +96,21 @@ exports.getMyBills = async (req, res, next) => {
     const resident = req.resident;
     if (!resident) return next(new AppError('Resident authentication required', 401));
 
-    const bills = await Bill.find({
+    const flat = await Flat.findById(resident.flatId || resident.flatId?._id);
+    const flatNum = flat?.flatNumber || resident.flatNumber;
+    const aptId = flat?.apartmentId || resident.apartmentId;
+
+    const query = {
       $or: [
         { flatId: resident.flatId },
-        { flatNumber: resident.flatNumber }
+        { flatNumber: flatNum },
+        { flatNumber: flatNumberMatch(flatNum) },
+        { flatNumber: toFlatKey(flatNum) }
       ]
-    }).sort({ billingMonth: -1 });
+    };
+    if (aptId) query.apartmentId = aptId;
+
+    const bills = await Bill.find(query).sort({ billingMonth: -1 });
 
     res.json({
       success: true,
@@ -105,13 +127,22 @@ exports.getMyPayments = async (req, res, next) => {
     const resident = req.resident;
     if (!resident) return next(new AppError('Resident authentication required', 401));
 
-    const payments = await Payment.find({
+    const flat = await Flat.findById(resident.flatId || resident.flatId?._id);
+    const flatNum = flat?.flatNumber || resident.flatNumber;
+    const aptId = flat?.apartmentId || resident.apartmentId;
+
+    const query = {
       $or: [
         { flatId: resident.flatId },
-        { flatNumber: resident.flatNumber },
+        { flatNumber: flatNum },
+        { flatNumber: flatNumberMatch(flatNum) },
+        { flatNumber: toFlatKey(flatNum) },
         { residentId: resident._id }
       ]
-    }).sort({ createdAt: -1 });
+    };
+    if (aptId) query.apartmentId = aptId;
+
+    const payments = await Payment.find(query).sort({ createdAt: -1 });
 
     res.json({
       success: true,

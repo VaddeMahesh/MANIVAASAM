@@ -4,7 +4,14 @@ const AppError = require('../utils/AppError');
 
 exports.getBank = async (req, res, next) => {
   try {
-    const bank = await BankDetails.findOne({ apartmentId: req.query.apartmentId });
+    const apartmentId = req.query.apartmentId || req.admin?.apartmentId || req.resident?.apartmentId;
+    let bank = null;
+    if (apartmentId) {
+      bank = await BankDetails.findOne({ apartmentId });
+    }
+    if (!bank) {
+      bank = await BankDetails.findOne();
+    }
     if (!bank) return res.json({ success: true, data: null, message: 'No bank details' });
     res.json({ success: true, data: bank });
   } catch (error) { next(error); }

@@ -205,7 +205,14 @@ exports.residentSignup = async (req, res, next) => {
 
     // The flat must already exist in this society (added by the admin or via bill import).
     // Flats are no longer auto-created here: a typo or wrong society used to create a bogus flat.
-    const flat = await Flat.findOne({ apartmentId: apartment._id, flatKey: toFlatKey(flatNumber) });
+    const flat = await Flat.findOne({
+      apartmentId: apartment._id,
+      $or: [
+        { flatKey: toFlatKey(flatNumber) },
+        { flatNumber: normalizeFlatNumber(flatNumber) },
+        { flatNumber: flatNumber }
+      ]
+    });
     if (!flat) {
       return next(new AppError(
         `Flat ${normalizeFlatNumber(flatNumber)} is not registered in ${apartment.apartmentName}. Please ask your society admin to add it.`,
@@ -257,24 +264,49 @@ exports.residentLogin = async (req, res, next) => {
 
     if (isEmail) {
       resident = await Resident.findOne({ email: input.toLowerCase() }).select('+password').populate('apartmentId');
-      if (!resident || !(await resident.comparePassword(password))) return invalid();
+      if (!resident) {
+        return next(new AppError('No resident account found with this email. First time here? Use "Register Flat Resident Account".', 401));
+      }
+      if (!(await resident.comparePassword(password))) {
+        return next(new AppError('Incorrect password. Please note that passwords are case-sensitive.', 401));
+      }
     } else {
       if (!societyCode) {
         return next(new AppError('Please enter your Society Code with your flat number, or sign in with your email.', 400));
       }
       const apartment = await findSocietyByCode(societyCode);
-      if (!apartment) return invalid();
+      if (!apartment) {
+        return next(new AppError(`Society code "${societyCode}" was not found. Please verify the code with your society admin.`, 401));
+      }
 
-      const flat = await Flat.findOne({ apartmentId: apartment._id, flatKey: toFlatKey(input) }).select('_id');
-      if (!flat) return invalid();
+      const flat = await Flat.findOne({
+        apartmentId: apartment._id,
+        $or: [
+          { flatKey: toFlatKey(input) },
+          { flatNumber: normalizeFlatNumber(input) },
+          { flatNumber: input }
+        ]
+      }).select('_id flatNumber');
+      if (!flat) {
+        return next(new AppError(`Flat "${input}" is not registered in ${apartment.apartmentName}. Please ask your society admin to add flat ${input} in the Flats directory.`, 401));
+      }
 
       // Owner and tenant can share a flat; pick the account whose password matches.
       const candidates = await Resident.find({ flatId: flat._id }).select('+password').populate('apartmentId');
+      if (candidates.length === 0) {
+        return next(new AppError(
+          `No resident account found for Flat ${flat.flatNumber}. First time here? Please click "Register Flat Resident Account" below to create your login password first.`,
+          401
+        ));
+      }
+
       const matches = [];
       for (const r of candidates) {
         if (await r.comparePassword(password)) matches.push(r);
       }
-      if (matches.length === 0) return invalid();
+      if (matches.length === 0) {
+        return next(new AppError(`Incorrect password for Flat ${flat.flatNumber}. Please check your password (passwords are case-sensitive, e.g. "Password123" vs "password123").`, 401));
+      }
       if (matches.length > 1) {
         return next(new AppError('More than one account on this flat uses this password. Please sign in with your email.', 409));
       }

@@ -4,7 +4,8 @@ import { useRouter } from 'next/navigation'
 import {
   Building, LogOut, Receipt, CreditCard, Droplets, CheckCircle2,
   Clock, AlertCircle, Upload, Eye, X, FileText, ArrowRight, ShieldCheck,
-  Calendar, Phone, User, Landmark, ChevronRight, Sparkles, RefreshCw, AlertTriangle, Check, MessageSquareWarning
+  Calendar, Phone, User, Landmark, ChevronRight, Sparkles, RefreshCw, AlertTriangle, Check, MessageSquareWarning,
+  QrCode, Smartphone, Zap, ExternalLink, Copy
 } from 'lucide-react'
 import { ResidentComplaints } from '@/components/resident/resident-complaints'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
@@ -17,6 +18,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useToast } from '@/hooks/use-toast'
 import { useAppStore } from '@/store'
+import { bankAPI } from '@/lib/api'
 import { formatCurrency, formatDate, formatMonth } from '@/lib/utils'
 
 export default function ResidentPortalPage() {
@@ -38,6 +40,8 @@ export default function ResidentPortalPage() {
   const [submittingPayment, setSubmittingPayment] = useState(false)
   const [paymentModalOpen, setPaymentModalOpen] = useState(false)
   const [activeTab, setActiveTab] = useState('overview')
+  const [bankDetails, setBankDetails] = useState<any>(null)
+  const [showQrCode, setShowQrCode] = useState(false)
 
   // Payment submission form state
   const [selectedBillId, setSelectedBillId] = useState('')
@@ -68,6 +72,8 @@ export default function ResidentPortalPage() {
     setLoading(true)
     try {
       await fetchResidentData()
+      const bRes = await bankAPI.get().catch(() => null)
+      if (bRes?.data) setBankDetails(bRes.data)
     } catch {
       toast({
         title: 'Error Loading Data',
@@ -98,12 +104,27 @@ export default function ResidentPortalPage() {
   )
 
   // Net total due across all bills:
-  const totalDue = pendingBills.reduce((sum: number, b: any) => {
+  const billsTotalDue = pendingBills.reduce((sum: number, b: any) => {
     return sum + Math.max(0, (b.amount || 0) + (b.penalty || 0) - (b.paidAmount || 0))
   }, 0)
 
-  // If latest bill is paid or totalDue is 0:
-  const isPaid = (latestBill?.status === 'paid' || latestBillDue === 0) && totalDue === 0
+  // Flat profile due (configured by admin in Flats Directory or backend pending total)
+  const flatProfileDue = Number(
+    residentFlatData?.pendingTotal ??
+    residentFlatData?.flat?.dues?.pendingDueAmount ??
+    residentFlatData?.flat?.dues?.totalDueAmount ??
+    0
+  )
+
+  // If bills exist, use bills total due; otherwise fall back to flat profile due
+  const totalDue = residentBills.length > 0 ? billsTotalDue : flatProfileDue
+
+  const hasBills = Boolean(latestBill || residentBills.length > 0)
+  const hasPendingDue = totalDue > 0
+
+  // ONLY mark as paid if there were actual bills and they are paid / settled (totalDue === 0 and latestBill was paid)
+  const isPaid = hasBills && Boolean(latestBill) && (latestBill.status === 'paid' || latestBillDue === 0) && totalDue === 0
+  const isNoBills = !hasBills && totalDue === 0
 
   // Check if any payment is currently under verification
   const pendingVerificationPayment = residentPayments.find((p: any) => p.status === 'pending_verification')
@@ -174,7 +195,7 @@ export default function ResidentPortalPage() {
 
       ctx.fillStyle = '#ffffff'
       ctx.font = 'bold 42px sans-serif'
-      ctx.fillText(`₹${Number(payAmount || totalDue || 3220).toLocaleString('en-IN')}`, 300, 360)
+      ctx.fillText(`₹${Number(payAmount || totalDue || 0).toLocaleString('en-IN')}`, 300, 360)
 
       ctx.fillStyle = '#38bdf8'
       ctx.font = '18px sans-serif'
@@ -268,10 +289,10 @@ export default function ResidentPortalPage() {
       return
     }
 
-    if (!proofImageBase64 && !screenshotPreview) {
+    if (!transactionId && !proofImageBase64 && !screenshotPreview) {
       toast({
-        title: 'Payment Screenshot Required',
-        description: 'Please upload a screenshot of your payment confirmation (UPI receipt or bank slip).',
+        title: 'Payment Details Required',
+        description: 'Please enter your 12-digit UPI Ref/UTR number or upload a screenshot.',
         variant: 'destructive',
       })
       return
@@ -314,6 +335,21 @@ export default function ResidentPortalPage() {
     setActiveScreenshotTitle(title)
     setPreviewModalOpen(true)
   }
+
+  // Dynamic UPI payment parameters
+  const effectiveUpiId = bankDetails?.upiId || 'manivaasam@upi'
+  const effectivePayeeName = residentFlatData?.flat?.apartmentName || residentProfile?.apartmentName || 'MANIVAASAM'
+  const flatStr = residentProfile?.flatNumber || residentFlatData?.flat?.flatNumber || 'Flat'
+  const currentMonthStr = formatMonth(latestBill?.billingMonth || '2026-10')
+  const billPayAmount = payAmount || String(totalDue || '0')
+  const upiTxnNote = `ManiVaasam ${flatStr} Maint ${currentMonthStr}`
+
+  const upiParams = `pa=${encodeURIComponent(effectiveUpiId)}&pn=${encodeURIComponent(effectivePayeeName)}&am=${encodeURIComponent(billPayAmount)}&tn=${encodeURIComponent(upiTxnNote)}&cu=INR`
+  const genericUpiUrl = `upi://pay?${upiParams}`
+  const gpayIntentUrl = `tez://upi/pay?${upiParams}`
+  const phonepeIntentUrl = `phonepe://pay?${upiParams}`
+  const paytmIntentUrl = `paytmmp://pay?${upiParams}`
+  const dynamicQrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=8&data=${encodeURIComponent(genericUpiUrl)}`
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
@@ -403,7 +439,9 @@ export default function ResidentPortalPage() {
           <Card className={`md:col-span-2 border-indigo-100 shadow-md relative overflow-hidden text-white transition-all ${
             isPaid
               ? 'bg-gradient-to-br from-emerald-900 via-teal-900 to-slate-900'
-              : 'bg-gradient-to-br from-indigo-900 via-indigo-800 to-slate-900'
+              : hasPendingDue
+              ? 'bg-gradient-to-br from-indigo-900 via-indigo-800 to-slate-900'
+              : 'bg-gradient-to-br from-slate-900 via-slate-800 to-indigo-950'
           }`}>
             <div className="absolute right-0 top-0 translate-x-10 -translate-y-10 w-64 h-64 rounded-full bg-white/5 pointer-events-none" />
             <div className="absolute right-20 bottom-0 translate-y-10 w-48 h-48 rounded-full bg-indigo-500/10 pointer-events-none" />
@@ -413,7 +451,7 @@ export default function ResidentPortalPage() {
                 <div>
                   <div className="flex items-center gap-2 mb-2">
                     <span className="text-xs font-semibold uppercase tracking-wider text-indigo-200">
-                      Maintenance Bill · {formatMonth(latestBill?.billingMonth || '2026-10')}
+                      {latestBill ? `Maintenance Bill · ${formatMonth(latestBill.billingMonth)}` : `Maintenance Account · Flat ${flatStr}`}
                     </span>
                     {isPaid ? (
                       <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/25 text-emerald-300 border border-emerald-400/40">
@@ -425,30 +463,41 @@ export default function ResidentPortalPage() {
                         <Clock className="h-4 w-4 text-amber-400" />
                         Verification Pending
                       </span>
-                    ) : (
+                    ) : hasPendingDue ? (
                       <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-red-500/25 text-red-300 border border-red-400/40">
                         <AlertCircle className="h-4 w-4 text-red-400" />
                         Payment Due
                       </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-400/30">
+                        <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                        Account Current · No Dues
+                      </span>
                     )}
                   </div>
 
-                  {/* Dynamic Outstanding Amount: Shows ₹0 when paid, or reduced remaining balance */}
+                  {/* Dynamic Outstanding Amount: Shows ₹0 when paid / no dues, or actual remaining balance */}
                   <div className="flex items-baseline gap-3">
                     <h2 className="text-3xl sm:text-5xl font-extrabold tracking-tight">
                       {formatCurrency(totalDue)}
                     </h2>
-                    {isPaid && (
+                    {isPaid ? (
                       <span className="text-emerald-300 text-sm font-semibold">
                         (Remaining Due: ₹0)
                       </span>
-                    )}
+                    ) : isNoBills ? (
+                      <span className="text-emerald-300 text-sm font-semibold">
+                        (No Pending Bills)
+                      </span>
+                    ) : null}
                   </div>
 
                   <p className="text-xs text-indigo-200 mt-1">
                     {isPaid
                       ? '✓ All maintenance dues are cleared. No payment required.'
-                      : `Due Date: ${formatDate(latestBill?.dueDate || new Date())}`}
+                      : hasPendingDue
+                      ? `Due Date: ${formatDate(latestBill?.dueDate || new Date())}`
+                      : '✓ No outstanding balance or bills pending for this flat.'}
                   </p>
                 </div>
 
@@ -474,20 +523,30 @@ export default function ResidentPortalPage() {
                         Admin is reviewing your proof
                       </span>
                     </div>
-                  ) : (
+                  ) : hasPendingDue ? (
                     <>
                       <Button
                         size="lg"
                         onClick={() => openPaymentModal(latestBill)}
-                        className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold shadow-lg shadow-emerald-900/30 flex items-center gap-2 text-sm"
+                        className="bg-gradient-to-r from-emerald-500 via-teal-500 to-indigo-600 hover:from-emerald-600 hover:to-indigo-700 text-white font-bold shadow-lg shadow-emerald-950/40 flex items-center gap-2 text-sm transition-all transform hover:scale-[1.02]"
                       >
-                        <Upload className="h-4 w-4" />
-                        Pay &amp; Upload Screenshot
+                        <Zap className="h-4 w-4 text-amber-300" />
+                        Pay Now (GPay / PhonePe / UPI)
                       </Button>
-                      <p className="text-[11px] text-indigo-200/80">
-                        UPI, GPay, PhonePe, or Bank Transfer
+                      <p className="text-[11px] text-indigo-200/90 font-medium">
+                        Instant 1-Tap UPI Apps &amp; Dynamic QR
                       </p>
                     </>
+                  ) : (
+                    <div className="flex flex-col items-start sm:items-end gap-1.5">
+                      <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white/10 border border-white/20 text-white font-semibold text-sm shadow-sm">
+                        <CheckCircle2 className="h-5 w-5 text-emerald-400" />
+                        <span>No Payment Required</span>
+                      </div>
+                      <span className="text-[11px] text-indigo-200/80 font-medium">
+                        Outstanding balance is ₹0
+                      </span>
+                    </div>
                   )}
                 </div>
               </div>
@@ -496,23 +555,25 @@ export default function ResidentPortalPage() {
               <div className="pt-4 border-t border-white/10 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
                 <div>
                   <span className="text-indigo-300 block text-[11px]">Flat Unit</span>
-                  <span className="font-bold text-white text-sm">{residentProfile?.flatNumber || 'A-104'}</span>
+                  <span className="font-bold text-white text-sm">{flatStr}</span>
                 </div>
                 <div>
                   <span className="text-indigo-300 block text-[11px]">Water Consumed</span>
                   <span className="font-bold text-white text-sm">
-                    {(latestBill?.waterUsed || 1150).toLocaleString('en-IN')} L
+                    {latestBill ? `${(latestBill.waterUsed || 0).toLocaleString('en-IN')} L` : '0 L (Not billed)'}
                   </span>
                 </div>
                 <div>
                   <span className="text-indigo-300 block text-[11px]">Tanker Charges</span>
                   <span className="font-bold text-white text-sm">
-                    {formatCurrency((latestBill?.breakdown?.manjeeraWaterAmt || 0) + (latestBill?.breakdown?.pvtTankerAmt || 1860))}
+                    {latestBill ? formatCurrency((latestBill.breakdown?.manjeeraWaterAmt || 0) + (latestBill.breakdown?.pvtTankerAmt || 0)) : '₹0'}
                   </span>
                 </div>
                 <div>
                   <span className="text-indigo-300 block text-[11px]">Base Maint + HMWSSB</span>
-                  <span className="font-bold text-white text-sm">₹1,360</span>
+                  <span className="font-bold text-white text-sm">
+                    {latestBill ? formatCurrency((latestBill.breakdown?.commonMaintAmt || 0) + (latestBill.breakdown?.hmwssbBill || 0)) : '₹0'}
+                  </span>
                 </div>
               </div>
             </CardContent>
@@ -534,7 +595,7 @@ export default function ResidentPortalPage() {
               <div className="flex items-center justify-between pb-2 border-b border-slate-100">
                 <span className="text-slate-400">Flat Number</span>
                 <span className="font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">
-                  {residentProfile?.flatNumber || 'A-104'}
+                  {flatStr}
                 </span>
               </div>
               <div className="flex items-center justify-between pb-2 border-b border-slate-100">
@@ -547,8 +608,12 @@ export default function ResidentPortalPage() {
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-slate-400">Payment Status</span>
-                <span className={`font-bold ${isPaid ? 'text-emerald-600' : 'text-amber-600'}`}>
-                  {isPaid ? 'All Dues Cleared (₹0)' : `Due: ${formatCurrency(totalDue)}`}
+                <span className={`font-bold ${isPaid ? 'text-emerald-600' : hasPendingDue ? 'text-red-600' : 'text-emerald-600'}`}>
+                  {isPaid
+                    ? 'All Dues Cleared (₹0)'
+                    : hasPendingDue
+                    ? `Due: ${formatCurrency(totalDue)}`
+                    : 'Account Current (₹0)'}
                 </span>
               </div>
             </CardContent>
@@ -579,190 +644,258 @@ export default function ResidentPortalPage() {
 
           {/* TAB 1: Current Bill & Water Meter Breakdown */}
           <TabsContent value="overview" className="space-y-4">
-            <Card className="border-slate-200 shadow-sm">
-              <CardHeader className="p-5 pb-3 border-b border-slate-100 flex flex-row items-center justify-between">
-                <div>
-                  <CardTitle className="text-base font-bold text-slate-900">
-                    Monthly Maintenance Bill Breakdown
-                  </CardTitle>
-                  <CardDescription className="text-xs">
-                    Itemized details of base maintenance, municipal water, and individual meter readings.
-                  </CardDescription>
-                </div>
-
-                {!isPaid && !pendingVerificationPayment && (
-                  <Button
-                    size="sm"
-                    onClick={() => openPaymentModal(latestBill)}
-                    className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs flex items-center gap-1.5"
-                  >
-                    <Upload className="h-3.5 w-3.5" />
-                    Submit Payment Screenshot
-                  </Button>
-                )}
-
-                {isPaid && (
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-200">
-                    <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-                    Bill Settled · ₹0 Due
+            {!latestBill ? (
+              hasPendingDue ? (
+                <Card className="border-slate-200 shadow-sm">
+                  <CardHeader className="p-5 pb-3 border-b border-slate-100 flex flex-row items-center justify-between">
+                    <div>
+                      <CardTitle className="text-base font-bold text-slate-900">
+                        Outstanding Maintenance Balance
+                      </CardTitle>
+                      <CardDescription className="text-xs">
+                        Pending dues carried forward on Flat {flatStr}.
+                      </CardDescription>
+                    </div>
+                    <Button
+                      size="sm"
+                      onClick={() => openPaymentModal()}
+                      className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs flex items-center gap-1.5 shadow-sm"
+                    >
+                      <Zap className="h-3.5 w-3.5 text-amber-300" />
+                      Pay Now (UPI)
+                    </Button>
+                  </CardHeader>
+                  <CardContent className="p-6">
+                    <div className="p-5 rounded-xl border border-red-200 bg-red-50/60 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div>
+                        <span className="text-xs font-semibold text-red-600 uppercase tracking-wider block mb-1">
+                          Payment Due
+                        </span>
+                        <h3 className="text-2xl font-bold text-red-950">
+                          {formatCurrency(totalDue)}
+                        </h3>
+                        <p className="text-xs text-red-700 mt-1">
+                          Previous pending balance on record for Flat {flatStr}. A monthly water meter bill has not been itemized yet for this period.
+                        </p>
+                      </div>
+                      <Button
+                        size="sm"
+                        onClick={() => openPaymentModal()}
+                        className="bg-red-600 hover:bg-red-700 text-white font-semibold text-xs flex items-center gap-1.5 shadow-sm shrink-0"
+                      >
+                        <Zap className="h-3.5 w-3.5 text-amber-300" />
+                        Clear Dues (Pay ₹{totalDue})
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              ) : (
+                <Card className="border-slate-200 shadow-sm">
+                  <CardHeader className="p-5 pb-3 border-b border-slate-100">
+                    <CardTitle className="text-base font-bold text-slate-900">
+                      Monthly Maintenance Bill Breakdown
+                    </CardTitle>
+                    <CardDescription className="text-xs">
+                      Itemized details of base maintenance, municipal water, and individual meter readings.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="p-8 text-center space-y-3">
+                    <div className="h-12 w-12 rounded-full bg-emerald-50 text-emerald-600 mx-auto flex items-center justify-center">
+                      <CheckCircle2 className="h-6 w-6" />
+                    </div>
+                    <h4 className="text-sm font-bold text-slate-800">No Monthly Bills Published Yet</h4>
+                    <p className="text-xs text-slate-500 max-w-md mx-auto">
+                      The society administration has not generated any maintenance or water bills for Flat {flatStr} yet. Your current balance is ₹0 with no dues pending.
+                    </p>
+                  </CardContent>
+                </Card>
+              )
+            ) : (
+              <Card className="border-slate-200 shadow-sm">
+                <CardHeader className="p-5 pb-3 border-b border-slate-100 flex flex-row items-center justify-between">
+                  <div>
+                    <CardTitle className="text-base font-bold text-slate-900">
+                      Monthly Maintenance Bill Breakdown · {formatMonth(latestBill.billingMonth)}
+                    </CardTitle>
+                    <CardDescription className="text-xs">
+                      Itemized details of base maintenance, municipal water, and individual meter readings.
+                    </CardDescription>
                   </div>
-                )}
-              </CardHeader>
 
-              <CardContent className="p-0">
-                <div className="p-5 space-y-6">
-                  {/* Meter Reading Highlight Box */}
-                  <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-4 grid grid-cols-2 sm:grid-cols-4 gap-4">
-                    <div>
-                      <span className="text-[11px] font-semibold text-indigo-700 block">Meter Start Reading</span>
-                      <span className="text-base font-bold text-slate-900">
-                        {latestBill?.meterStart?.toLocaleString('en-IN') ?? '315'}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-[11px] font-semibold text-indigo-700 block">Meter End Reading</span>
-                      <span className="text-base font-bold text-slate-900">
-                        {latestBill?.meterEnd?.toLocaleString('en-IN') ?? '430'}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-[11px] font-semibold text-indigo-700 block">Multiplier</span>
-                      <span className="text-base font-bold text-indigo-700">10x</span>
-                    </div>
-                    <div>
-                      <span className="text-[11px] font-semibold text-indigo-700 block">Total Water Consumed</span>
-                      <span className="text-base font-bold text-indigo-900">
-                        {(latestBill?.waterUsed || 1150).toLocaleString('en-IN')} Liters
-                      </span>
-                    </div>
-                  </div>
+                  {!isPaid && !pendingVerificationPayment && (
+                    <Button
+                      size="sm"
+                      onClick={() => openPaymentModal(latestBill)}
+                      className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs flex items-center gap-1.5 shadow-sm"
+                    >
+                      <Zap className="h-3.5 w-3.5 text-amber-300" />
+                      Pay Now (UPI)
+                    </Button>
+                  )}
 
-                  {/* Itemized Table */}
-                  <div className="border border-slate-200 rounded-xl overflow-hidden">
-                    <table className="w-full text-xs">
-                      <thead className="bg-slate-50 text-slate-700 border-b border-slate-200">
-                        <tr>
-                          <th className="py-2.5 px-4 text-left font-semibold">Bill Component</th>
-                          <th className="py-2.5 px-4 text-center font-semibold">Rule / Slab</th>
-                          <th className="py-2.5 px-4 text-right font-semibold">Amount</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        <tr>
-                          <td className="py-3 px-4 font-medium text-slate-900">
-                            Common Area Maintenance
-                            <span className="block text-[11px] text-slate-400 font-normal">Electricity, lift, security & cleaning</span>
-                          </td>
-                          <td className="py-3 px-4 text-center text-slate-500">Fixed monthly share</td>
-                          <td className="py-3 px-4 text-right font-semibold text-slate-800">
-                            ₹{latestBill?.breakdown?.commonMaintAmt || 1200}
-                          </td>
-                        </tr>
-                        <tr>
-                          <td className="py-3 px-4 font-medium text-slate-900">
-                            HMWSSB Water Supply
-                            <span className="block text-[11px] text-slate-400 font-normal">Municipal water supply base charge</span>
-                          </td>
-                          <td className="py-3 px-4 text-center text-slate-500">Fixed share per flat</td>
-                          <td className="py-3 px-4 text-right font-semibold text-slate-800">
-                            ₹{latestBill?.breakdown?.hmwssbBill || 160}
-                          </td>
-                        </tr>
-                        <tr>
-                          <td className="py-3 px-4 font-medium text-slate-900">
-                            Manjeera Tanker Water
-                            <span className="block text-[11px] text-slate-400 font-normal">Society tanker quota (up to cap)</span>
-                          </td>
-                          <td className="py-3 px-4 text-center text-slate-500">
-                            {latestBill?.breakdown?.manjeeraWaterAmt > 0 ? 'Exemption slab rate' : 'No excess'}
-                          </td>
-                          <td className="py-3 px-4 text-right font-semibold text-slate-800">
-                            {formatCurrency(latestBill?.breakdown?.manjeeraWaterAmt || 0)}
-                          </td>
-                        </tr>
-                        <tr>
-                          <td className="py-3 px-4 font-medium text-slate-900">
-                            Private Tanker Water
-                            <span className="block text-[11px] text-slate-400 font-normal">Excess water usage above tanker cap</span>
-                          </td>
-                          <td className="py-3 px-4 text-center text-slate-500">
-                            {(latestBill?.breakdown?.pvtTankerAmt || 0) > 0 ? 'Excess usage rate' : 'No excess'}
-                          </td>
-                          <td className="py-3 px-4 text-right font-semibold text-slate-800">
-                            {formatCurrency(latestBill?.breakdown?.pvtTankerAmt || (latestBill?.amount ? latestBill.amount - 1360 : 1860))}
-                          </td>
-                        </tr>
+                  {isPaid && (
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-200">
+                      <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                      Bill Settled · ₹0 Due
+                    </div>
+                  )}
+                </CardHeader>
 
-                        {/* Bill Total Generated Row */}
-                        <tr className="bg-slate-50">
-                          <td className="py-3.5 px-4 font-bold text-slate-900 text-sm">
-                            Total Bill Generated
-                          </td>
-                          <td className="py-3.5 px-4 text-center text-slate-500">
-                            Due by {formatDate(latestBill?.dueDate || new Date())}
-                          </td>
-                          <td className="py-3.5 px-4 text-right font-extrabold text-slate-900 text-sm">
-                            {formatCurrency(latestBill?.amount || 3220)}
-                          </td>
-                        </tr>
+                <CardContent className="p-0">
+                  <div className="p-5 space-y-6">
+                    {/* Meter Reading Highlight Box */}
+                    <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-4 grid grid-cols-2 sm:grid-cols-4 gap-4">
+                      <div>
+                        <span className="text-[11px] font-semibold text-indigo-700 block">Meter Start Reading</span>
+                        <span className="text-base font-bold text-slate-900">
+                          {latestBill.meterStart != null ? latestBill.meterStart.toLocaleString('en-IN') : '—'}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-[11px] font-semibold text-indigo-700 block">Meter End Reading</span>
+                        <span className="text-base font-bold text-slate-900">
+                          {latestBill.meterEnd != null ? latestBill.meterEnd.toLocaleString('en-IN') : '—'}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-[11px] font-semibold text-indigo-700 block">Multiplier</span>
+                        <span className="text-base font-bold text-indigo-700">10x</span>
+                      </div>
+                      <div>
+                        <span className="text-[11px] font-semibold text-indigo-700 block">Total Water Consumed</span>
+                        <span className="text-base font-bold text-indigo-900">
+                          {(latestBill.waterUsed || 0).toLocaleString('en-IN')} Liters
+                        </span>
+                      </div>
+                    </div>
 
-                        {/* Deduct Paid Amount Row if payment recorded */}
-                        {((latestBill?.paidAmount || 0) > 0 || isPaid) && (
-                          <tr className="bg-emerald-50/70 border-t border-emerald-100">
-                            <td className="py-3 px-4 font-semibold text-emerald-800 flex items-center gap-1.5">
-                              <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
-                              <span>Amount Paid (Recorded by Admin / Verified)</span>
+                    {/* Itemized Table */}
+                    <div className="border border-slate-200 rounded-xl overflow-hidden">
+                      <table className="w-full text-xs">
+                        <thead className="bg-slate-50 text-slate-700 border-b border-slate-200">
+                          <tr>
+                            <th className="py-2.5 px-4 text-left font-semibold">Bill Component</th>
+                            <th className="py-2.5 px-4 text-center font-semibold">Rule / Slab</th>
+                            <th className="py-2.5 px-4 text-right font-semibold">Amount</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          <tr>
+                            <td className="py-3 px-4 font-medium text-slate-900">
+                              Common Area Maintenance
+                              <span className="block text-[11px] text-slate-400 font-normal">Electricity, lift, security & cleaning</span>
                             </td>
-                            <td className="py-3 px-4 text-center text-emerald-700 text-[11px] font-medium">
-                              {isPaid ? 'Paid in Full' : 'Partial Payment Received'}
-                            </td>
-                            <td className="py-3 px-4 text-right font-bold text-emerald-700 text-sm">
-                              - {formatCurrency(isPaid ? (latestBill?.amount || 3220) : latestBill.paidAmount)}
+                            <td className="py-3 px-4 text-center text-slate-500">Fixed monthly share</td>
+                            <td className="py-3 px-4 text-right font-semibold text-slate-800">
+                              {formatCurrency(latestBill.breakdown?.commonMaintAmt || 0)}
                             </td>
                           </tr>
-                        )}
+                          <tr>
+                            <td className="py-3 px-4 font-medium text-slate-900">
+                              HMWSSB Water Supply
+                              <span className="block text-[11px] text-slate-400 font-normal">Municipal water supply base charge</span>
+                            </td>
+                            <td className="py-3 px-4 text-center text-slate-500">Fixed share per flat</td>
+                            <td className="py-3 px-4 text-right font-semibold text-slate-800">
+                              {formatCurrency(latestBill.breakdown?.hmwssbBill || 0)}
+                            </td>
+                          </tr>
+                          <tr>
+                            <td className="py-3 px-4 font-medium text-slate-900">
+                              Manjeera Tanker Water
+                              <span className="block text-[11px] text-slate-400 font-normal">Society tanker quota (up to cap)</span>
+                            </td>
+                            <td className="py-3 px-4 text-center text-slate-500">
+                              {(latestBill.breakdown?.manjeeraWaterAmt || 0) > 0 ? 'Exemption slab rate' : 'No excess'}
+                            </td>
+                            <td className="py-3 px-4 text-right font-semibold text-slate-800">
+                              {formatCurrency(latestBill.breakdown?.manjeeraWaterAmt || 0)}
+                            </td>
+                          </tr>
+                          <tr>
+                            <td className="py-3 px-4 font-medium text-slate-900">
+                              Private Tanker Water
+                              <span className="block text-[11px] text-slate-400 font-normal">Excess water usage above tanker cap</span>
+                            </td>
+                            <td className="py-3 px-4 text-center text-slate-500">
+                              {(latestBill.breakdown?.pvtTankerAmt || 0) > 0 ? 'Excess usage rate' : 'No excess'}
+                            </td>
+                            <td className="py-3 px-4 text-right font-semibold text-slate-800">
+                              {formatCurrency(latestBill.breakdown?.pvtTankerAmt || 0)}
+                            </td>
+                          </tr>
 
-                        {/* Net Due Row: Shows ₹0 when paid */}
-                        <tr className={isPaid ? 'bg-emerald-100/50 text-emerald-900' : 'bg-indigo-50/50'}>
-                          <td className="py-3.5 px-4 font-extrabold text-sm">
-                            Remaining Net Due Amount
-                          </td>
-                          <td className="py-3.5 px-4 text-center font-medium">
-                            {isPaid ? (
-                              <Badge variant="outline" className="bg-emerald-100 text-emerald-800 border-emerald-300 font-bold text-[11px]">
-                                Settled (₹0 Due)
-                              </Badge>
-                            ) : (
-                              <span className="text-red-600 font-semibold text-xs">Payment Due</span>
-                            )}
-                          </td>
-                          <td className={`py-3.5 px-4 text-right font-extrabold text-base ${isPaid ? 'text-emerald-700' : 'text-indigo-700'}`}>
-                            {formatCurrency(latestBillDue)}
-                          </td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
+                          {/* Bill Total Generated Row */}
+                          <tr className="bg-slate-50">
+                            <td className="py-3.5 px-4 font-bold text-slate-900 text-sm">
+                              Total Bill Generated
+                            </td>
+                            <td className="py-3.5 px-4 text-center text-slate-500">
+                              Due by {formatDate(latestBill.dueDate || new Date())}
+                            </td>
+                            <td className="py-3.5 px-4 text-right font-extrabold text-slate-900 text-sm">
+                              {formatCurrency(latestBill.amount || 0)}
+                            </td>
+                          </tr>
 
-                  {/* Society Bank / UPI Payment Info */}
-                  <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 space-y-2">
-                    <div className="flex items-center gap-2 text-xs font-bold text-slate-800">
-                      <Landmark className="h-4 w-4 text-indigo-600" />
-                      Payment Status &amp; Policy
+                          {/* Deduct Paid Amount Row if payment recorded */}
+                          {((latestBill.paidAmount || 0) > 0 || isPaid) && (
+                            <tr className="bg-emerald-50/70 border-t border-emerald-100">
+                              <td className="py-3 px-4 font-semibold text-emerald-800 flex items-center gap-1.5">
+                                <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                                <span>Amount Paid (Recorded by Admin / Verified)</span>
+                              </td>
+                              <td className="py-3 px-4 text-center text-emerald-700 text-[11px] font-medium">
+                                {isPaid ? 'Paid in Full' : 'Partial Payment Received'}
+                              </td>
+                              <td className="py-3 px-4 text-right font-bold text-emerald-700 text-sm">
+                                - {formatCurrency(isPaid ? (latestBill.amount || 0) : (latestBill.paidAmount || 0))}
+                              </td>
+                            </tr>
+                          )}
+
+                          {/* Net Due Row: Shows ₹0 when paid */}
+                          <tr className={isPaid ? 'bg-emerald-100/50 text-emerald-900' : 'bg-indigo-50/50'}>
+                            <td className="py-3.5 px-4 font-extrabold text-sm">
+                              Remaining Net Due Amount
+                            </td>
+                            <td className="py-3.5 px-4 text-center font-medium">
+                              {isPaid ? (
+                                <Badge variant="outline" className="bg-emerald-100 text-emerald-800 border-emerald-300 font-bold text-[11px]">
+                                  Settled (₹0 Due)
+                                </Badge>
+                              ) : (
+                                <span className="text-red-600 font-semibold text-xs">Payment Due</span>
+                              )}
+                            </td>
+                            <td className={`py-3.5 px-4 text-right font-extrabold text-base ${isPaid ? 'text-emerald-700' : 'text-indigo-700'}`}>
+                              {formatCurrency(latestBillDue)}
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
                     </div>
-                    <p className="text-xs text-slate-600">
-                      {isPaid ? (
-                        <span className="text-emerald-700 font-medium">
-                          ✓ All maintenance dues for this month have been marked as paid by the administrator. No further payment is required.
-                        </span>
-                      ) : (
-                        'Please make the payment via UPI, Google Pay, PhonePe, or Net Banking. Once paid, click "Pay & Upload Screenshot" to submit your proof for admin verification.'
-                      )}
-                    </p>
+
+                    {/* Society Bank / UPI Payment Info */}
+                    <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 space-y-2">
+                      <div className="flex items-center gap-2 text-xs font-bold text-slate-800">
+                        <Landmark className="h-4 w-4 text-indigo-600" />
+                        Payment Status &amp; Policy
+                      </div>
+                      <p className="text-xs text-slate-600">
+                        {isPaid ? (
+                          <span className="text-emerald-700 font-medium">
+                            ✓ All maintenance dues for this month have been marked as paid by the administrator. No further payment is required.
+                          </span>
+                        ) : (
+                          'Please make the payment via UPI, Google Pay, PhonePe, or Net Banking. Once paid, click "Pay & Upload Screenshot" to submit your proof for admin verification.'
+                        )}
+                      </p>
+                    </div>
                   </div>
-                </div>
-              </CardContent>
-            </Card>
+                </CardContent>
+              </Card>
+            )}
           </TabsContent>
 
           {/* TAB 2: Payment History & Screenshots */}
@@ -782,10 +915,10 @@ export default function ResidentPortalPage() {
                   <Button
                     size="sm"
                     onClick={() => openPaymentModal(latestBill)}
-                    className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs flex items-center gap-1.5"
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs flex items-center gap-1.5 shadow-sm"
                   >
-                    <Upload className="h-3.5 w-3.5" />
-                    Upload Payment Proof
+                    <Zap className="h-3.5 w-3.5 text-amber-300" />
+                    Pay via UPI
                   </Button>
                 )}
 
@@ -895,14 +1028,14 @@ export default function ResidentPortalPage() {
 
       {/* MODAL: Pay Maintenance & Upload Screenshot */}
       <Dialog open={paymentModalOpen} onOpenChange={setPaymentModalOpen}>
-        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-lg max-h-[92vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-slate-900">
-              <CreditCard className="h-5 w-5 text-indigo-600" />
-              Pay Maintenance &amp; Upload Screenshot
+              <Zap className="h-5 w-5 text-indigo-600" />
+              Pay Maintenance with UPI / GPay / PhonePe
             </DialogTitle>
             <DialogDescription className="text-xs">
-              Upload your payment screenshot (UPI success screen, Google Pay, PhonePe, or Bank receipt) for admin verification.
+              Tap your preferred UPI app below to pay with zero fees, or scan the QR code. Then confirm your transaction UTR number to record it instantly.
             </DialogDescription>
           </DialogHeader>
 
@@ -920,163 +1053,276 @@ export default function ResidentPortalPage() {
               </Button>
             </div>
           ) : (
-            <form onSubmit={handleSubmitPayment} className="space-y-4 py-2">
+            <form onSubmit={handleSubmitPayment} className="space-y-4 py-1">
               {/* Flat & Bill Context */}
-              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 grid grid-cols-2 gap-3 text-xs">
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between text-xs">
                 <div>
-                  <span className="text-slate-400 block">Flat Number</span>
-                  <span className="font-bold text-slate-900">{residentProfile?.flatNumber || 'A-104'}</span>
+                  <span className="text-slate-400 block text-[11px]">Flat &amp; Month</span>
+                  <span className="font-bold text-slate-900 text-sm">
+                    Flat {flatStr} · {currentMonthStr}
+                  </span>
                 </div>
-                <div>
-                  <span className="text-slate-400 block">Billing Month</span>
-                  <span className="font-bold text-slate-900">{formatMonth(latestBill?.billingMonth || '2026-10')}</span>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <Label className="text-xs">Remaining Due Amount (₹) <span className="text-red-500">*</span></Label>
-                  <Input
-                    type="number"
-                    required
-                    value={payAmount}
-                    onChange={(e) => setPayAmount(e.target.value)}
-                    placeholder="3220"
-                    max={totalDue || 99999}
-                    className="h-9 text-xs"
-                  />
-                  <span className="text-[10px] text-slate-400">Total Due: {formatCurrency(totalDue)}</span>
-                </div>
-
-                <div className="space-y-1">
-                  <Label className="text-xs">Payment Method <span className="text-red-500">*</span></Label>
-                  <Select value={payMethod} onValueChange={setPayMethod}>
-                    <SelectTrigger className="h-9 text-xs">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="upi">UPI / GPay / PhonePe</SelectItem>
-                      <SelectItem value="bank_transfer">Net Banking / IMPS</SelectItem>
-                      <SelectItem value="cash">Cash to Admin</SelectItem>
-                      <SelectItem value="cheque">Cheque</SelectItem>
-                      <SelectItem value="online">Online Portal</SelectItem>
-                    </SelectContent>
-                  </Select>
+                <div className="text-right">
+                  <span className="text-slate-400 block text-[11px]">Total Outstanding</span>
+                  <span className="font-extrabold text-indigo-700 text-base">
+                    {formatCurrency(Number(billPayAmount) || totalDue)}
+                  </span>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <Label className="text-xs">Transaction / UTR ID</Label>
-                  <Input
-                    value={transactionId}
-                    onChange={(e) => setTransactionId(e.target.value)}
-                    placeholder="e.g. UPI392817283"
-                    className="h-9 text-xs"
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <Label className="text-xs">Payment Date</Label>
-                  <Input
-                    type="date"
-                    value={payDate}
-                    onChange={(e) => setPayDate(e.target.value)}
-                    className="h-9 text-xs"
-                  />
-                </div>
-              </div>
-
-              {/* SCREENSHOT UPLOAD BOX */}
-              <div className="space-y-2">
+              {/* STEP 1: ONE-TAP UPI APP LAUNCHER */}
+              <div className="rounded-xl border border-indigo-200/90 bg-gradient-to-br from-indigo-50/70 via-white to-purple-50/40 p-4 space-y-3">
                 <div className="flex items-center justify-between">
-                  <Label className="text-xs font-semibold text-slate-800">
-                    Payment Confirmation Screenshot <span className="text-red-500">*</span>
-                  </Label>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={handleUseSampleScreenshot}
-                    className="h-6 text-[11px] text-indigo-600 hover:text-indigo-800 p-0 flex items-center gap-1"
-                  >
-                    <Sparkles className="h-3 w-3" />
-                    Use Demo Receipt
-                  </Button>
-                </div>
-
-                {screenshotPreview ? (
-                  <div className="relative border-2 border-indigo-200 rounded-xl p-2 bg-slate-50 flex items-center gap-3">
-                    <img
-                      src={screenshotPreview}
-                      alt="Payment Screenshot Preview"
-                      className="h-20 w-20 object-cover rounded-lg border border-slate-200 shadow-sm"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-bold text-slate-800 truncate">Screenshot Attached</p>
-                      <p className="text-[11px] text-slate-500">Ready for admin verification</p>
-                      <div className="flex items-center gap-2 mt-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => fileInputRef.current?.click()}
-                          className="h-6 text-[11px] px-2"
-                        >
-                          Change
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => {
-                            setScreenshotPreview(null)
-                            setProofImageBase64('')
-                          }}
-                          className="h-6 text-[11px] px-2 text-red-600 hover:text-red-700"
-                        >
-                          Remove
-                        </Button>
-                      </div>
+                  <div className="flex items-center gap-2">
+                    <div className="h-6 w-6 rounded-md bg-indigo-600 text-white flex items-center justify-center shadow-xs">
+                      <Zap className="h-3.5 w-3.5" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-900">Step 1: Tap to Pay with UPI</h4>
+                      <p className="text-[11px] text-slate-500">Amount &amp; Flat Note pre-filled automatically</p>
                     </div>
                   </div>
-                ) : (
-                  <div
-                    onClick={() => fileInputRef.current?.click()}
-                    className="border-2 border-dashed border-slate-300 hover:border-indigo-500 bg-slate-50 hover:bg-indigo-50/30 transition-all rounded-xl p-6 text-center cursor-pointer group"
+                  <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px] font-bold">
+                    0% Fee
+                  </Badge>
+                </div>
+
+                {/* 1-Tap App Buttons */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {/* Google Pay */}
+                  <a
+                    href={gpayIntentUrl}
+                    onClick={() => setPayMethod('upi')}
+                    className="flex flex-col items-center justify-center p-2.5 rounded-lg border border-slate-200 bg-white hover:border-emerald-400 hover:bg-emerald-50/30 transition-all text-center group shadow-xs"
                   >
-                    <div className="h-10 w-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto mb-2 group-hover:scale-105 transition-transform">
-                      <Upload className="h-5 w-5" />
+                    <div className="h-7 w-7 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-xs mb-1 group-hover:scale-110 transition-transform">
+                      G
                     </div>
-                    <p className="text-xs font-semibold text-slate-800">
-                      Click to upload payment screenshot
-                    </p>
-                    <p className="text-[11px] text-slate-400 mt-0.5">
-                      PNG, JPG, or WEBP (Max 8MB)
-                    </p>
+                    <span className="text-xs font-bold text-slate-800">Google Pay</span>
+                    <span className="text-[10px] text-slate-400">1-Tap Pay</span>
+                  </a>
+
+                  {/* PhonePe */}
+                  <a
+                    href={phonepeIntentUrl}
+                    onClick={() => setPayMethod('upi')}
+                    className="flex flex-col items-center justify-center p-2.5 rounded-lg border border-slate-200 bg-white hover:border-purple-400 hover:bg-purple-50/30 transition-all text-center group shadow-xs"
+                  >
+                    <div className="h-7 w-7 rounded-full bg-purple-100 text-purple-700 flex items-center justify-center font-bold text-xs mb-1 group-hover:scale-110 transition-transform">
+                      P
+                    </div>
+                    <span className="text-xs font-bold text-slate-800">PhonePe</span>
+                    <span className="text-[10px] text-slate-400">1-Tap Pay</span>
+                  </a>
+
+                  {/* Paytm */}
+                  <a
+                    href={paytmIntentUrl}
+                    onClick={() => setPayMethod('upi')}
+                    className="flex flex-col items-center justify-center p-2.5 rounded-lg border border-slate-200 bg-white hover:border-sky-400 hover:bg-sky-50/30 transition-all text-center group shadow-xs"
+                  >
+                    <div className="h-7 w-7 rounded-full bg-sky-100 text-sky-700 flex items-center justify-center font-bold text-xs mb-1 group-hover:scale-110 transition-transform">
+                      ₹
+                    </div>
+                    <span className="text-xs font-bold text-slate-800">Paytm</span>
+                    <span className="text-[10px] text-slate-400">1-Tap Pay</span>
+                  </a>
+
+                  {/* Any UPI App */}
+                  <a
+                    href={genericUpiUrl}
+                    onClick={() => setPayMethod('upi')}
+                    className="flex flex-col items-center justify-center p-2.5 rounded-lg border border-indigo-200 bg-indigo-50/80 hover:bg-indigo-100 transition-all text-center group shadow-xs"
+                  >
+                    <div className="h-7 w-7 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold text-xs mb-1 group-hover:scale-110 transition-transform">
+                      <Smartphone className="h-3.5 w-3.5" />
+                    </div>
+                    <span className="text-xs font-bold text-indigo-950">Any UPI</span>
+                    <span className="text-[10px] text-indigo-600">BHIM / Cred</span>
+                  </a>
+                </div>
+
+                {/* Scan QR Code Toggle */}
+                <div className="pt-2 flex items-center justify-between border-t border-slate-200/60 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setShowQrCode(!showQrCode)}
+                    className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 flex items-center gap-1.5 transition-colors"
+                  >
+                    <QrCode className="h-3.5 w-3.5" />
+                    {showQrCode ? 'Hide QR Code' : 'Scan Dynamic QR Code (from Phone)'}
+                  </button>
+                  <span className="text-[11px] text-slate-500 font-mono">UPI: {effectiveUpiId}</span>
+                </div>
+
+                {showQrCode && (
+                  <div className="pt-2 flex flex-col items-center justify-center bg-white p-3 rounded-lg border border-slate-200 shadow-xs space-y-2">
+                    <img
+                      src={dynamicQrUrl}
+                      alt="Dynamic Payment QR Code"
+                      className="w-44 h-44 rounded-md border border-slate-100 shadow-xs"
+                    />
+                    <div className="text-center text-[11px] text-slate-600">
+                      <p className="font-semibold text-slate-800">Scan with any UPI App (GPay, PhonePe, Paytm)</p>
+                      <p className="text-slate-400 text-[10px]">Pre-filled: {formatCurrency(Number(billPayAmount) || totalDue)} to {effectiveUpiId}</p>
+                    </div>
                   </div>
                 )}
-
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={handleImageSelect}
-                />
               </div>
 
-              <div className="space-y-1">
-                <Label className="text-xs">Remarks / Note (Optional)</Label>
-                <Input
-                  value={payRemarks}
-                  onChange={(e) => setPayRemarks(e.target.value)}
-                  placeholder="e.g. Paid via PhonePe from ICICI account"
-                  className="h-9 text-xs"
-                />
+              {/* STEP 2: RECORD TRANSACTION */}
+              <div className="space-y-3 pt-1">
+                <div className="flex items-center gap-2">
+                  <div className="h-6 w-6 rounded-md bg-slate-800 text-white flex items-center justify-center text-xs font-bold">
+                    2
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-900">Step 2: Enter Transaction Details to Confirm</h4>
+                    <p className="text-[11px] text-slate-500">Provide the 12-digit UPI Reference (UTR) from your payment screen</p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <Label className="text-xs font-semibold">12-Digit UPI Ref / UTR No. <span className="text-red-500">*</span></Label>
+                    <Input
+                      value={transactionId}
+                      onChange={(e) => setTransactionId(e.target.value)}
+                      placeholder="e.g. 432198765432"
+                      required
+                      className="h-9 text-xs font-mono"
+                    />
+                    <span className="text-[10px] text-slate-400">Found on GPay / PhonePe receipt</span>
+                  </div>
+
+                  <div className="space-y-1">
+                    <Label className="text-xs font-semibold">Amount Paid (₹) <span className="text-red-500">*</span></Label>
+                    <Input
+                      type="number"
+                      required
+                      value={payAmount}
+                      onChange={(e) => setPayAmount(e.target.value)}
+                      placeholder="3220"
+                      max={totalDue || 99999}
+                      className="h-9 text-xs font-semibold"
+                    />
+                    <span className="text-[10px] text-slate-400">Total Outstanding: {formatCurrency(totalDue)}</span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <Label className="text-xs">Payment Method</Label>
+                    <Select value={payMethod} onValueChange={setPayMethod}>
+                      <SelectTrigger className="h-9 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="upi">UPI / GPay / PhonePe</SelectItem>
+                        <SelectItem value="bank_transfer">Net Banking / IMPS</SelectItem>
+                        <SelectItem value="cash">Cash to Admin</SelectItem>
+                        <SelectItem value="cheque">Cheque</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <Label className="text-xs">Payment Date</Label>
+                    <Input
+                      type="date"
+                      value={payDate}
+                      onChange={(e) => setPayDate(e.target.value)}
+                      className="h-9 text-xs"
+                    />
+                  </div>
+                </div>
+
+                {/* SCREENSHOT UPLOAD (OPTIONAL) */}
+                <div className="space-y-2 pt-1">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs font-semibold text-slate-700">
+                      Payment Screenshot Proof <span className="text-slate-400 font-normal">(Optional)</span>
+                    </Label>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleUseSampleScreenshot}
+                      className="h-6 text-[11px] text-indigo-600 hover:text-indigo-800 p-0 flex items-center gap-1"
+                    >
+                      <Sparkles className="h-3 w-3" />
+                      Attach Demo Receipt
+                    </Button>
+                  </div>
+
+                  {screenshotPreview ? (
+                    <div className="relative border-2 border-indigo-200 rounded-xl p-2 bg-slate-50 flex items-center gap-3">
+                      <img
+                        src={screenshotPreview}
+                        alt="Payment Screenshot Preview"
+                        className="h-16 w-16 object-cover rounded-lg border border-slate-200 shadow-xs"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-bold text-slate-800 truncate">Screenshot Attached</p>
+                        <p className="text-[11px] text-slate-500">Ready for admin verification</p>
+                        <div className="flex items-center gap-2 mt-1">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => fileInputRef.current?.click()}
+                            className="h-6 text-[10px] px-2"
+                          >
+                            Change
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setScreenshotPreview(null)
+                              setProofImageBase64('')
+                            }}
+                            className="h-6 text-[10px] px-2 text-red-600 hover:text-red-700"
+                          >
+                            Remove
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div
+                      onClick={() => fileInputRef.current?.click()}
+                      className="border border-dashed border-slate-300 hover:border-indigo-400 bg-slate-50/70 hover:bg-indigo-50/20 transition-all rounded-lg p-3 text-center cursor-pointer group flex items-center justify-center gap-2"
+                    >
+                      <Upload className="h-4 w-4 text-slate-400 group-hover:text-indigo-600" />
+                      <span className="text-xs text-slate-600 group-hover:text-indigo-700 font-medium">
+                        Click to attach screenshot (optional)
+                      </span>
+                    </div>
+                  )}
+
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleImageSelect}
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <Label className="text-xs">Remarks / Note (Optional)</Label>
+                  <Input
+                    value={payRemarks}
+                    onChange={(e) => setPayRemarks(e.target.value)}
+                    placeholder="e.g. Paid via PhonePe from HDFC account"
+                    className="h-9 text-xs"
+                  />
+                </div>
               </div>
 
-              <DialogFooter className="pt-2">
+              <DialogFooter className="pt-3 border-t border-slate-100 flex items-center justify-between">
                 <Button type="button" variant="outline" size="sm" onClick={() => setPaymentModalOpen(false)}>
                   Cancel
                 </Button>
@@ -1084,17 +1330,17 @@ export default function ResidentPortalPage() {
                   type="submit"
                   size="sm"
                   disabled={submittingPayment || isPaid || Number(payAmount) <= 0}
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white flex items-center gap-1.5"
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold flex items-center gap-1.5 shadow-sm"
                 >
                   {submittingPayment ? (
                     <>
                       <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                      Submitting...
+                      Recording Payment...
                     </>
                   ) : (
                     <>
                       <CheckCircle2 className="h-3.5 w-3.5" />
-                      Submit for Admin Approval
+                      Confirm &amp; Record Payment
                     </>
                   )}
                 </Button>
